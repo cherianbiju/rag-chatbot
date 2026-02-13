@@ -11,7 +11,6 @@ st.set_page_config(
 )
 
 st.title("⚙️ Testing RAG System")
-st.markdown("Generate parametric Replicad CAD code using RAG")
 
 # Initialize RAG system once
 @st.cache_resource
@@ -46,4 +45,3 @@ if st.button("Generate Code") and user_query:
             st.error(f"Error: {e}")
 
 st.markdown("---")
-st.caption("RAG-based Parametric CAD Code Generation System")

@@ -30,7 +30,7 @@ class HybridFilenameRetriever(VectorIndexRetriever):
     def __init__(self, index, similarity_top_k=20, filename_boost=1.5, **kwargs):
         super().__init__(index=index, similarity_top_k=similarity_top_k, **kwargs)
         self.filename_boost = filename_boost
-        self.final_top_k = 2
+        self.final_top_k = 3
     
     def _retrieve(self, query_bundle: QueryBundle) -> List[NodeWithScore]:
         
