@@ -1,0 +1,10 @@
+streamlit
+llama-index
+llama-index-vector-stores-pinecone
+llama-index-embeddings-huggingface
+llama-index-llms-google-genai
+pinecone
+python-dotenv
+torch
+transformers
+sentence-transformers
