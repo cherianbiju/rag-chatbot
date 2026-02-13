@@ -1,0 +1,8 @@
+Create a vase with a slimmer middle by reducing higherCircleRadius to 0.5 and increasing lowerCircleRadius to 2
+
+
+Create a parametric birdhouse with height 120 units, front width 130 units, wall thickness 3 units, entrance hole diameter 55 units positioned at one-third height, and a top hook height of 15 units
+
+Make a bottle wider and reduce the thicknesss,and square on shape
+
+Generate a twisted cycloidal gear profile using parametric equations and subtract a central shaft hole.
