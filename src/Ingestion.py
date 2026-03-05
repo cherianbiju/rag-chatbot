@@ -1,204 +1,304 @@
-import os
-import time
-from pathlib import Path
-from typing import List, Dict
-from dotenv import load_dotenv
+"""
+ingest.py — CAD Code Ingestion Pipeline
+========================================
+Reads .md Replicad code example files, embeds them with
+Microsoft CodeBERT, and upserts into Pinecone.
+"""
 
-from llama_index.core import Document, VectorStoreIndex, StorageContext, Settings
-from llama_index.core.schema import TextNode
-from llama_index.vector_stores.pinecone import PineconeVectorStore
-from llama_index.embeddings.huggingface import HuggingFaceEmbedding
+import os
+import sys
+import time
+import hashlib
+import argparse
+from pathlib import Path
+from typing import Optional
+
+import torch
+from transformers import AutoTokenizer, AutoModel
+from dotenv import load_dotenv
 from pinecone import Pinecone, ServerlessSpec
 
 load_dotenv()
 
+# ─────────────────────────────────────────────
+# CONFIGURATION
+# ─────────────────────────────────────────────
+
+PINECONE_API_KEY  = os.getenv("PINECONE_API_KEY")
+CODE_INDEX_NAME   = os.getenv("CODE_INDEX_NAME", "cad-code-examples")
+
+CODEBERT_MODEL    = "microsoft/codebert-base"
+EMBEDDING_DIM     = 768   # CodeBERT CLS token output dim
+
+PINECONE_METRIC   = "cosine"
+PINECONE_CLOUD    = "aws"
+PINECONE_REGION   = "us-east-1"
+
+UPSERT_BATCH_SIZE = 50
+
+DEFAULT_CODE_DIR  = r"C:\Users\ASUS\Desktop\RAG_testing\code_data"
+
+tokenizer = None
+model     = None
+device    = None
 
 
-# CONFIG
+# ─────────────────────────────────────────────
+# CODEBERT SETUP
+# ─────────────────────────────────────────────
+
+def init_codebert():
+    global tokenizer, model, device
+
+    print(f"  Loading CodeBERT: {CODEBERT_MODEL} ...")
+    device    = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    tokenizer = AutoTokenizer.from_pretrained(CODEBERT_MODEL)
+    model     = AutoModel.from_pretrained(CODEBERT_MODEL).to(device)
+    model.eval()
+
+    print(f"  ✅ CodeBERT loaded on {device}")
+
+    # Smoke test
+    print("  🔬 Testing embedding...")
+    test = get_embedding("test connection")
+    if test is None:
+        raise RuntimeError("Embedding smoke test failed")
+    print(f"  ✅ Smoke test passed — got {len(test)}-dim vector\n")
 
 
-class Config:
-    PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
-    PINECONE_INDEX_NAME = os.getenv("PINECONE_INDEX_NAME", "cadtesting")
-    EMBEDDING_MODEL = "microsoft/codebert-base"
-    EMBEDDING_DIMENSION = 768
-    DOCUMENTS_DIR = Path("../documents")
+def get_embedding(text: str) -> Optional[list]:
+    """
+    Tokenize text, run through CodeBERT, return CLS token vector (768-dim).
+    Input is truncated to 512 tokens (CodeBERT's max).
+    """
+    try:
+        inputs = tokenizer(
+            text,
+            return_tensors="pt",
+            truncation=True,
+            max_length=512,
+            padding=True,
+        ).to(device)
+
+        with torch.no_grad():
+            outputs = model(**inputs)
+
+        # CLS token → (1, 768) → flatten to list
+        cls_vector = outputs.last_hidden_state[:, 0, :]
+        return cls_vector.squeeze().cpu().tolist()
+
+    except Exception as e:
+        print(f"    ❌ Embedding error: {repr(e)}")
+        return None
 
 
+# ─────────────────────────────────────────────
+# PINECONE SETUP
+# ─────────────────────────────────────────────
 
+def init_pinecone():
+    if not PINECONE_API_KEY:
+        raise ValueError("PINECONE_API_KEY not set in .env")
+
+    pc       = Pinecone(api_key=PINECONE_API_KEY)
+    existing = [idx.name for idx in pc.list_indexes()]
+
+    if CODE_INDEX_NAME not in existing:
+        print(f"  Creating index: {CODE_INDEX_NAME} (dim={EMBEDDING_DIM})")
+        pc.create_index(
+            name=CODE_INDEX_NAME,
+            dimension=EMBEDDING_DIM,
+            metric=PINECONE_METRIC,
+            spec=ServerlessSpec(cloud=PINECONE_CLOUD, region=PINECONE_REGION),
+        )
+        while not pc.describe_index(CODE_INDEX_NAME).status["ready"]:
+            print("  Waiting for index to be ready...")
+            time.sleep(3)
+        print(f"  ✅ Index created: {CODE_INDEX_NAME}")
+    else:
+        print(f"  ✅ Connected to index: {CODE_INDEX_NAME}")
+
+    return pc.Index(CODE_INDEX_NAME)
+
+
+# ─────────────────────────────────────────────
 # METADATA EXTRACTION
+# ─────────────────────────────────────────────
 
+CAD_CATEGORIES = {
+    "rotor":      ["rotor", "disc", "disk", "brake"],
+    "gear":       ["gear", "pinion", "rack", "tooth"],
+    "shaft":      ["shaft", "axle", "crankshaft", "camshaft"],
+    "housing":    ["housing", "casing", "enclosure"],
+    "bracket":    ["bracket", "mount", "flange", "plate"],
+    "piston":     ["piston", "cylinder", "connecting"],
+    "bearing":    ["bearing", "race", "ring", "bushing"],
+    "turbine":    ["turbine", "compressor", "blade", "wheel"],
+    "fastener":   ["bolt", "screw", "nut", "stud"],
+    "suspension": ["suspension", "control", "wishbone"],
+}
 
-def extract_metadata(code: str, filename: str) -> Dict:
-    all_ops = []
+def extract_metadata(filepath: Path, code: str) -> dict:
+    stem_lower = filepath.stem.lower()
+    code_lower = code.lower()
 
-    for op in [
-        "draw", "drawCircle", "extrude", "revolve",
-        "fillet", "shell", "cut", "fuse",
-        "loft", "sweep", "translate", "rotate"
-    ]:
-        if op in code:
-            all_ops.append(op)
+    category = "generic"
+    for cat, keywords in CAD_CATEGORIES.items():
+        if any(kw in stem_lower or kw in code_lower[:800] for kw in keywords):
+            category = cat
+            break
 
-    patterns = []
-    lower_code = code.lower()
-
-    if "shell" in lower_code:
-        patterns.append("hollow")
-    if "revolve" in lower_code:
-        patterns.append("revolution")
-    if "fillet" in lower_code or "chamfer" in lower_code:
-        patterns.append("rounded")
-    if "cut" in lower_code or "fuse" in lower_code:
-        patterns.append("boolean")
-
-    complexity = len(all_ops) * 10
-    if "loft" in code or "sweep" in code:
-        complexity += 20
-
-    complexity = min(complexity, 100)
+    line_count = code.count("\n")
+    complexity = "simple"
+    if line_count > 150:
+        complexity = "complex"
+    elif line_count > 60:
+        complexity = "medium"
 
     return {
-        "filename": filename,
-        "operations": ",".join(all_ops[:10]),
-        "patterns": ",".join(patterns),
-        "complexity": complexity
+        "source_file": filepath.name,
+        "category":    category,
+        "complexity":  complexity,
+        "line_count":  line_count,
+        "code":        code,        # full code stored — used by LLM at query time
     }
 
 
-# LOAD DOCUMENTS 
+# ─────────────────────────────────────────────
+# BUILD EMBEDDING TEXT
+# ─────────────────────────────────────────────
+
+def build_embedding_text(stem: str, metadata: dict, code: str) -> str:
+    name_readable = stem.replace("_", " ").replace("-", " ")
+
+    ops = []
+    if "revolve("  in code: ops.append("revolve")
+    if "extrude("  in code: ops.append("extrude")
+    if "sweep("    in code: ops.append("sweep")
+    if ".fuse("    in code: ops.append("boolean union")
+    if ".cut("     in code: ops.append("boolean cut")
+    if ".fillet("  in code: ops.append("fillet")
+
+    description = (
+        f"Replicad CAD code example: {name_readable}. "
+        f"Category: {metadata['category']}. "
+        f"Operations: {', '.join(ops) if ops else 'basic'}. "
+        f"Complexity: {metadata['complexity']}.\n\n"
+    )
+
+    # Cap at 2000 chars — CodeBERT truncates at 512 tokens anyway
+    return description + code[:2000]
 
 
-def load_documents(docs_dir: Path) -> List[Document]:
-    print("\nLoading CAD model files only...\n")
+# ─────────────────────────────────────────────
+# MAIN INGESTION
+# ─────────────────────────────────────────────
 
-    documents = []
+def ingest(code_dir: str, dry_run: bool = False):
+    print("\n" + "=" * 60)
+    print("  CAD CODE INGESTION  (Microsoft CodeBERT)")
+    print("=" * 60)
 
-    for file_path in sorted(docs_dir.iterdir()):
+    code_path = Path(code_dir)
+    if not code_path.exists():
+        raise FileNotFoundError(f"Directory not found: {code_dir}")
 
-        # Only allow JavaScript CAD files
-        if file_path.suffix == ".js":
+    md_files = sorted(code_path.rglob("*.md"))
+    if not md_files:
+        print(f"  ⚠️  No .md files found in {code_dir}")
+        return
 
-            # Extra safety: skip any system-like files
-            if "system" in file_path.name.lower():
-                print(f"Skipped (system file): {file_path.name}")
+    print(f"\n  Found {len(md_files)} .md files in: {code_dir}")
+
+    init_codebert()
+    index = init_pinecone() if not dry_run else None
+
+    vectors       = []
+    success_count = 0
+    skip_count    = 0
+    error_count   = 0
+
+    for i, filepath in enumerate(md_files, 1):
+        print(f"\n  [{i}/{len(md_files)}] {filepath.name}")
+
+        try:
+            code = filepath.read_text(encoding="utf-8").strip()
+            if not code:
+                print("    ⚠️  Empty — skipping")
+                skip_count += 1
                 continue
 
-            code = file_path.read_text(encoding="utf-8")
-            metadata = extract_metadata(code, file_path.name)
+            metadata   = extract_metadata(filepath, code)
+            embed_text = build_embedding_text(filepath.stem, metadata, code)
 
-            documents.append(
-                Document(
-                    text=code,
-                    metadata=metadata
-                )
-            )
+            print(f"    category={metadata['category']}  "
+                  f"complexity={metadata['complexity']}  "
+                  f"lines={metadata['line_count']}  "
+                  f"embed_chars={len(embed_text)}")
 
-            print(f"Stored: {file_path.name}")
+            if dry_run:
+                print(f"    [DRY RUN] skipping upload")
+                success_count += 1
+                continue
 
-        else:
-            print(f"Skipped (not CAD model): {file_path.name}")
+            embedding = get_embedding(embed_text)
+            if embedding is None:
+                print("    ❌ Embedding failed — skipping")
+                error_count += 1
+                continue
 
-    print(f"\nTotal CAD documents stored: {len(documents)}\n")
-    return documents
+            print(f"    ✅ Embedded ({len(embedding)} dims)")
 
+            vector_id = hashlib.md5(str(filepath).encode()).hexdigest()
+            vectors.append({
+                "id":       vector_id,
+                "values":   embedding,
+                "metadata": metadata,
+            })
+            success_count += 1
 
+            if len(vectors) >= UPSERT_BATCH_SIZE:
+                index.upsert(vectors=vectors)
+                print(f"    📤 Upserted batch of {len(vectors)}")
+                vectors = []
 
-# CHUNK DOCUMENTS 
+        except Exception as e:
+            print(f"    ❌ Unexpected error: {repr(e)}")
+            error_count += 1
 
+    # Final partial batch
+    if vectors and not dry_run:
+        index.upsert(vectors=vectors)
+        print(f"\n  📤 Final upsert: {len(vectors)} vectors")
 
-def chunk_documents(documents: List[Document]) -> List[TextNode]:
-    print("Preparing vectors...\n")
+    print("\n" + "=" * 60)
+    print("  INGESTION COMPLETE")
+    print("=" * 60)
+    print(f"  ✅ Success : {success_count}")
+    print(f"  ⏭️  Skipped : {skip_count}")
+    print(f"  ❌ Errors  : {error_count}")
 
-    chunks = []
-
-    for doc in documents:
-        metadata = doc.metadata.copy()
-        metadata["is_complete_model"] = True
-
-        node = TextNode(
-            text=doc.text,
-            metadata=metadata
-        )
-
-        chunks.append(node)
-        print(f"{metadata.get('filename')} → 1 vector")
-
-    print(f"\nTotal vectors created: {len(chunks)}\n")
-    return chunks
-
-
-
-# SETUP PINECONE
-
-
-def setup_pinecone(force_recreate=False):
-    print("Setting up Pinecone...\n")
-
-    pc = Pinecone(api_key=Config.PINECONE_API_KEY)
-
-    if force_recreate and Config.PINECONE_INDEX_NAME in pc.list_indexes().names():
-        print("Deleting existing index...")
-        pc.delete_index(Config.PINECONE_INDEX_NAME)
-        time.sleep(3)
-
-    if Config.PINECONE_INDEX_NAME not in pc.list_indexes().names():
-        print("Creating new index...")
-        pc.create_index(
-            name=Config.PINECONE_INDEX_NAME,
-            dimension=Config.EMBEDDING_DIMENSION,
-            metric="cosine",
-            spec=ServerlessSpec(cloud="aws", region="us-east-1")
-        )
-
-        while not pc.describe_index(Config.PINECONE_INDEX_NAME).status["ready"]:
-            time.sleep(1)
-
-    print("Pinecone index ready.\n")
-    return pc.Index(Config.PINECONE_INDEX_NAME)
+    if not dry_run and index:
+        stats = index.describe_index_stats()
+        print(f"  📦 Total vectors in Pinecone: {stats['total_vector_count']}")
+    print()
 
 
-
-# CREATE EMBEDDINGS & STORE
-
-
-def store_embeddings(chunks: List[TextNode], pinecone_index):
-    print("Creating CodeBERT embeddings...\n")
-
-    Settings.embed_model = HuggingFaceEmbedding(
-        model_name=Config.EMBEDDING_MODEL
-    )
-
-    vector_store = PineconeVectorStore(pinecone_index=pinecone_index)
-    storage_context = StorageContext.from_defaults(vector_store=vector_store)
-
-    print(f"Processing {len(chunks)} vectors...\n")
-
-    index = VectorStoreIndex(
-        nodes=chunks,
-        storage_context=storage_context,
-        show_progress=True
-    )
-
-    print(f"\nSuccessfully stored {len(chunks)} vectors.\n")
-    return index
-
-
-
-# MAIN BUILD FUNCTION
-
-
-def build_rag(force_recreate=False):
-
-    documents = load_documents(Config.DOCUMENTS_DIR)
-    chunks = chunk_documents(documents)
-    pinecone_index = setup_pinecone(force_recreate)
-    store_embeddings(chunks, pinecone_index)
-
-    print("✅ RAG BUILD COMPLETE\n")
-
+# ─────────────────────────────────────────────
+# ENTRY POINT
+# ─────────────────────────────────────────────
 
 if __name__ == "__main__":
-    import sys
-    force = "--force" in sys.argv
-    build_rag(force_recreate=force)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--dir",     default=DEFAULT_CODE_DIR)
+    parser.add_argument("--dry-run", action="store_true")
+    args = parser.parse_args()
+
+    try:
+        ingest(args.dir, args.dry_run)
+    except KeyboardInterrupt:
+        print("\n⚠️  Interrupted.")
+        sys.exit(1)
+    except Exception as e:
+        print(f"\n❌ Fatal error: {repr(e)}")
+        sys.exit(1)

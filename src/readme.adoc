@@ -1,0 +1,1325 @@
+:docdate:
+:experimental: 
+:xrefstyle: short
+// :toc: 
+:sectnums:
+:idprefix:
+:idseparator: -
+
+ifdef::env-github[]
+:tip-caption: :bulb:
+:note-caption: :information_source:
+:important-caption: :heavy_exclamation_mark:
+:caution-caption: :fire:
+:warning-caption: :warning:
+endif::[]
+
+// ============================ TITLE =====================================
+= Replicad Quick Reference 
+
+This document contains a beginner's guide for users of the Replicad (https://replicad.xyz/) libary and tools. Its purpose is mainly to demonstrate how models can be build using the tools, the so-called "studio", that are offered alongside the library. If you want to use this document to generate a separate manual, uncomment the line `:toc:` in the header of this document. As in github the table of contents does not work to quickly jump to the required section, you can better use the outline facility of github. Click the bullet list icon in the header of this document (see header bar, image:/images/menu_icon.png[] ).   
+
+At the Replicad website some documentation is offered as well as links to the detailed documentation of the API (Application Progamming Interface) of the library (see https://replicad.xyz/docs/api/). Nevertheless it can be quite daunting to collect all information for people that are just interested in modelling and are less experienced in reading computer code or building applications. 
+
+Using the Replicad tools it is possible to build complicated mechanical parts and even free form geometry. Two examples are shown below. Throughout the guide some examples will be given how the commands discussed in each chapter can be applied to real modelling examples. The folder https://github.com/raydeleu/ReplicadManual/tree/main/models contains some examples on how the functions of Replicad can be applied to create models. 
+
+---
+._Shapes created with Replicad, both technical and freeform is possible_
+image::/images/fork-plunge.png[width=1000]
+---
+
+For additional help you can visit https://github.com/sgenoud/replicad and in particular the discussions area. There are sections labelled "Q&A" and "modelling help" where you can post your question. The programmer of Replicad is active in responding questions from users and you can also expect some help from fellow users. 
+
+To understand how the library can be included in new applications please consult the replicad website at https://replicad.xyz/. A very nice example how the library can be used can be visited at https://blingmything.sgenoud.com/. The code to this application is also available on github at https://github.com/sgenoud/blingmything. 
+
+
+// ========================================= WHAT IS REPLICAD? ==============================
+
+== What is Replicad?
+Replicad is a software library that allows the user to enter a kind of script to create a 3D model. This model can then be exported in several formats,  allowing the user to create nice images (renders) or to send the shape to a 3D printer.
+
+The approach to model a 3D shape with code (or script) has become popular through the availability of a software package called OpenSCAD (Open Scripted-Computer-Aided-Design). OpenSCAD has been used initially to model simple shapes for 3D modelling. It uses a technique called Constructive Solid Geometry (CSG), which indicates that 3D shapes are created by combining simple geometric shapes such as boxes, spheres, cylinders into more complex shapes. The operations used to combine these shapes are called boolean operations.
+
+---
+._Simple car model created in OpenSCAD_
+[#img-car-opencad]
+image::https://github.com/raydeleu/CascadeStudioManual/blob/main/images/openscad-car.jpg[align="center"]
+---
+
+This shape is created by entering the following script:
+
+.Code to create a car in OpenSCAD, using two boxes and 6 cylinders (4 wheels and two axles)
+
+[source, javascript]
+----
+cube([60,20,10],center=true);
+translate([5,0,10 - 0.001])
+    cube([30,20,10],center=true);
+translate([-20,-15,0])
+    rotate([90,0,0])
+    cylinder(h=3,r=8,center=true);
+translate([-20,15,0])
+    rotate([90,0,0])
+    cylinder(h=3,r=8,center=true);
+translate([20,-15,0])
+    rotate([90,0,0])
+    cylinder(h=3,r=8,center=true);
+translate([20,15,0])
+    rotate([90,0,0])
+    cylinder(h=3,r=8,center=true);
+translate([-20,0,0])
+    rotate([90,0,0])
+    cylinder(h=30,r=2,center=true);
+translate([20,0,0])
+    rotate([90,0,0])
+    cylinder(h=30,r=2,center=true);
+----
+
+Replicad takes this approach a step further. It still retains the approach that shapes are created with a simple script, but it uses a more advanced 3D kernel that allows BRep (Boundary Representation) modelling. In this type of 3D kernel a solid is represented as a collection of surface elements - described using a mathematical equation - that define the boundary between interior and exterior points.
+
+The advantage of a BRep kernel is that in addition to the simple boolean operations it is possible to define how the surfaces are linked to each other. This allows a more easy creation of angled edges (chamfers) or rounded edges (fillets). 
+
+---
+._Example of Replicad shape with fillets_
+image::/images/replicad_fillets.png[]
+---
+
+// ======================================== TOOLS TO WORK WITH REPLICAD ==================================
+
+== Tools to work with Replicad
+A model in Replicad is built using a javascript input file (see <<File template>> ). The best way for a beginner is to use the studio tools which come in two flavours namely the workbench and a visualizer. 
+
+=== Workbench
+The workbench, available at https://studio.replicad.xyz/workbench , is a complete design environment that includes a code editor with a pane to visualize the result of the input file. The result can be exported to STL and STEP formats to allow further processing, for example 3D printing. The code in the editor can be downloaded as a javascript file. Use the icon with a circle and arrow going down that can be found directly on top of the editor window. Of course you can also select the code in the editor and paste it into any other editor. 
+
+---
+._User interface of the Replicad workbench_ 
+[]
+image::/images/workbench.png[width=800]
+---
+
+An interesting feature of the workbench that is offered at the link shown above is that you can create a link to your model that includes the code. In that way you can share your model through an internet link that opens the workbench with your code in it. Others can then take your code and make modifications for their own purpose. Use the icon above the editor window that resembles a rectangle with an arrow going up. 
+
+=== Visualizer
+For people that prefer to edit the input files on their own computer using their preferred code editor, a visualizer is offered at https://studio.replicad.xyz/visualiser that can be used to show the results of processing an input file. Just like the workbench the visualizer supports the export of the shapes. 
+
+---
+._User interface of the Visualizer_ 
+[]
+image::/images/interface_black.png[width=800]
+---
+
+== Process 
+The process to draw a shape in Replicad looks like this: 
+
+---
+._Different ways to create 3D shapes in Replicad_ 
+image::/images/processv2.png[]
+---
+
+The normal flow to define a shape is to start with a 2-dimensional sketch of the shape (see <<Sketch>>), then use a function like extrude or revolve to define a 3 dimensional shape (see <<Create shapes>>. This 3 dimensional shape can then be modified, for example by rounding edges (see <<Modify shapes>>). In its simplest form this modification is applied to all edges at once. A more advanced approach is to select individual edges or faces to apply the modification (see <<Find features>>). When the shape is complete it can be transformed, for example by translating, rotating et cetera (<<Transform shapes>>). Finally a shape can be combined with another shape (<<Combine shapes>>). Combinations can mean fusing the shapes together, subtracting one shape from the other or finding the intersection between two shapes. 
+
+A beginner can start with the pre-baked shapes to shorten the path to determine a shape. There are 2 dimensional pre-baked shapes like rectangles and circles, and 3 dimensional shapes like spheres or cylinders. 
+
+All the steps described above will explained separately in the next sections. For users that have used a CAD (computer aided design) program earlier, the terminology will sound very familiar. Tools like 
+
+* Siemens SolidEdge (https://solidedge.siemens.com/en/solutions/users/hobbyists-and-makers/), 
+* OnShape (https://onshape.com)
+* Autodesk Fusion 360 (https://www.autodesk.com/products/fusion-360/personal)
+* FreeCad (https://www.freecad.org/) 
+
+use a similar approach. 
+
+---
+._User interface of OnShape with a sketch highlighted in the modelling history_  
+[]
+image::/images/onshape_sketch.png[]
+---
+
+Users coming from OpenSCAD (https://www.openscard.org) will immediately recognize the coding approach but might be tempted to start with the prebaked 3D shapes first, as this makes modelling in OpenSCAD so fast. Go to <<Pre-baked shapes>> to see examples how these can be used to quickly model a part by transforming (see <<Transform shapes>> and combining the parts (see <<Combine shapes>>). 
+
+There is no right or wrong way to go about creating the 3 dimensional shape. Compare it to creating a 3 dimensional structure by adding material like a brick layer or painter versus removing material like a sculptor. Use the chapters to quickly find your way through the documentation to suit the approach that you prefer.
+
+[WARNING]
+====
+The user should be aware that Replicad is built upon the OpenCascade 3D modelling kernel which is available as open source and may be used without paying any license fee. However, this kernel has quite some limitations compared to kernels that are developed by large companies. 
+
+One of the most referenced shortcomings of OpenCascade is referred to as the "Topological Naming Problem" (or TNP). Whenever a model is modified so that the number of faces or edges change, the internal names of faces and edges are changed by the kernel. If your model relies on referencing the edges or faces by their old name, rebuilding the model will fail. Currently the developers of OpenCascade try to correct this issue by using a more complex identification method for faces and edges, but as this affects the complete kernel this change may take a long time. 
+
+Another shortcoming is related to filleting. This will be discussed in <<Modify shapes>>. 
+====
+
+
+<<<
+
+// ================================ FILE TEMPLATE ================================
+
+[#File_template] 
+== File template
+
+The template to create and display a 3D part in Replicad looks like this.  
+
+[source, javascript]
+----
+const r = replicad
+
+const defaultParams = {                // setting the value of the parameters
+  height:       100,
+  baseWidth:     20,
+  ...}
+
+// next lines allow intellisense help in VS Code 
+/** @typedef { typeof import("replicad") } replicadLib */
+/** @type {function(replicadLib, typeof defaultParams): any} */
+
+function main( 
+ { Sketcher, sketchRectangle, ... },   // functions used within the main program
+ { height, basewidth, ....        } )  // parameters to adjust the model
+{
+    // add code to describe the shape
+return  shape   |  
+return  {shape: [shape], highlight: [foundFeature]}
+}
+----
+
+Note that the line 
+
+[source, javascript]
+----
+const r = replicad
+----
+
+can be used to circumvent the need to list all functions that are used in the code. Prepending each function with `r.` directly points the compiler to the complete Replicad source code. So for example, instead of listing the function `sketchRectangle` at the beginning of the declaration of `main` you can use `r.sketchRectangle`. Yet another approach is to list all the functions but add this add the beginning of your code using the notation: 
+
+``` javascript
+const { draw, ... other functions ... } = replicad;
+
+function main() 
+{
+    // code to describe the shape
+return shape 
+} 
+``` 
+
+Using this notation there is no need to remember which of the arguments in the brackets of `function main({functions},{designparams})` contains what. You can simply use `main()`. 
+
+Alternatively to the file listing shown above, you can use the arrow notation for the javascript function. This notation can be combined with the notations shown above to shortcut the definition of functions from the Replicad library. 
+
+[source, javascript]
+----
+const defaultParams = {                // setting the value of the parameters
+  height:       100,
+  baseWidth:     20,
+  ...}
+
+const main = (
+  { Sketcher, sketchRectangle, ... },   // functions used within the main program
+  { height, basewidth, ....        }    // parameters to adjust the model
+) => {
+    // add code to describe the shape
+return  shape   |  
+return  {shape: [shape], highlight: [foundFeature]}
+}
+----
+
+If you want to display multiple shapes, the returned variable should be an array of all shapes. In this array it is possible to define 
+
+* the variable name of the shape, 
+* the name of the shape as a "string", 
+* the color of the shape in the Visualiser, using the X11 "color name", see https://en.wikipedia.org/wiki/X11_color_names#Color_name_chart
+
++ 
+Example colors are black, 
+grey,
+dimgrey,
+slategrey,
+lightslategrey,
+steelblue,
+lightsteelblue,
+red,
+green,
+blue,
+violet,
+silver, 
+skyblue,
+magenta,
+mediumpurple. 
+
+* the opacity, where opacity 1 is the default (visible) and 0 is fully transparant. 
+
+An example of an array is: 
+
+[source, javascript]
+----
+let shapeArray = [
+{shape: plunge, name: "plunge", color:"steelblue", opacity: 0.5}, 
+{shape: body, color: "orange",opacity:0.5},
+{shape: filler, color: "red"}]
+---- 
+
+
+
+
+// ============================================== SKETCH =======================
+
+== Sketch
+To start a sketch, use the `new Sketcher` command. Note the keyword `new` that is required to create a new object of the type `Sketcher`.  
+
+[source, javascript]
+----
+let sketch = new Sketcher("XZ",-5)
+".sketchCommands"        (see below)
+.close()                    // ends the sketch with line to starting point
+.done()                     // ends the sketch without closing
+.closeWithMirror()          // closes the sketch with mirror on axis from start to end
+
+----
+
+The definition of a sketch refers to a plane in 3D space where the sketch is drawn. Most often this will be either the "XY" plane (top view), the "XZ" plane (front view) or the "XY" plane (side view). It is also possible to define an offset to these planes, as was done in the code sample above.  
+
+An alternative and often preferred method to create a sketch is to use the function `draw()` to create a drawing. 
+A drawing can be understood as an adapted version of a sketch. A sketch starts with identifying the sketching plane first and then defining a wire. As the plane is defined up front, the sketch is in fact a 3D shape from its origin. In contrast a drawing is considered a pure 2D shape that can be placed on a plane after its creation. Compared to a sketch a drawing has the following advantages: 
+
+* drawings can be translated, rotated (in 2D space) and scaled;
+* drawings can be used in 2D boolean operations;
+* drawings can be exported directly in 2D formats;
+* drawings can be placed on other shapes, not only planes
+
+The drawing can be defined with the `draw()` function. As this function already includes the creation of a new object the `new` keyword is not needed. The starting point of the drawing can be defined by adding a 2D point as a parameter to the `draw()`, for example `draw([5,5])`.   
+
+[source, javascript]
+----
+const shape1 = draw()
+    .lineTo([20,0])
+    .line(0,5)
+    .hLine(10)
+    .vLine(5)
+    .polarLineTo([22,45])
+    .polarLine(10,150)
+    .halfEllipse(-10, -15, 5)
+    .smoothSpline(2, -5)
+    .close() 
+----    
+
+After its creating, a drawing has to be placed on a plane, using the method `.sketchOnPlane`. Through this method, a drawing can also be translated and rotated in 3D space. You can achieve this by translating and pivoting the plane on which the drawing is placed. For example, using the following code: 
+
+[source, javascript]
+----
+  const bottomPlane = makePlane().pivot(20, "Y").translateZ(80);
+  const bottomCircle = drawCircle(9).sketchOnPlane(bottomPlane);
+----
+
+first a Plane is defined, which is first pivoted by 20 degrees along the Y-axis and then translated up 80 mm on the Z-axis. Note that you can not translate or rotate the sketch after it is placed on a plane. The full set of commands to create and position planes is : 
+
+[cols="1,3",stripes=even]
+|===
+m| .sketchOnPlane(plane,offset)   | place the drawing on a given plane 
+m| makePlane()                    | create a basic plane, default is on the XY plane
+m| .pivot(degrees, axis)          | rotate the plane x degrees around the given axis
+m| .translate                     | translate the plane 
+m| .translateZ                    | translate the plane along the Z-axis
+m| .translateY                    | translate the plane along the Y-axis
+m| .translateX                    | translate the plane along the X-axis
+|===
+
+A standard plane is identified "XY", "XZ", "YZ", but using the function `makePlane()` you can also define a new plane with its own name. 
+
+<<<
+
+There are a number of ".methods" to define a sketch that can be used either on a `new Sketcher()` object or on a `draw()` object. These will be explained in the following paragraphs. 
+
+
+=== Lines
+
+image::/images/lines.png[]
+
+Straight lines can be sketched using the line functions. Be aware that points are generally defined as a tuple or array, i.e. enclosed in square brackets. This array either contains the absolute distance in the x and y direction from the origin, or the distance and angle in case of polar coordinates. Relative distances to the x- and y-axis are defined as two separate values dx and dy. 
+
+[cols="1,3",stripes=even]
+|===
+m| .movePointerTo([x,y])          | move pointer without drawing, can only be used at start
+m| .lineTo([x,y])                 | line to absolute coordinates
+m| .line(dx,dy)                   | line to relative coordinates
+m| .vLineTo(y)                    | vertical line to absolute y
+m| .vLine(dy)                     | vertical line to relative y
+m| .hLineTo(x)                    | horizontal line to absolute x
+m| .hLine(dx)                     | horizontal line to relative x
+m| .polarLineTo([radius,theta])   | line to absolute polar coordinates. Note that the absolute polar coordinates are defined as an vector [radius,theta]
+m| .polarLine(distance,angle)     | line to relative polar coordinates
+m| .tangentLine(distance)         | tangent extension over distance
+|===
+
+=== Arcs and ellipses
+image::/images/arcs.png[]
+
+The following commands are available to create circular and elliptical arcs in your sketch. Just as with lines be aware that points are generally defined as a tuple or array, i.e. enclosed in square brackets. Relative distances to the x- and y-axis are defined as two separate values dx and dy. 
+The elliptic curves can be defined in more detail with three extra parameters. If the values are omitted the default values are used. 
+
+[cols="1,3",stripes=even]
+|===
+m| .threePointsArcTo(point_end,point_mid)   | arc from current to end via mid, absolute coordinates
+m| .threePointsArc(dx,dy,dx_via,dy_via)     | arc from current to end via mid, relative coordinates
+m| .sagittaArcTo(point_end,sagitta)         | arc from current to end with sag , absolute coordinates
+m| .sagittaArc(dx,dy,sagitta)               | arc from current to end with sag, relative coordinates
+m| .vSagittaArc(dy,sagitta)                 | vertical line to endpoint with sag, relative y
+m| .hSagittaArc(dx,sagitta)                 | horizontal line to endpoint with sag, relative x
+m| .tangentArcTo([x,y])                     | arc tangent to current line to end, absolute coordinates
+m| .tangentArc(dx,dy)                       | arc tangent to current line to end, relative coordinates
+m| .ellipseTo([x,y],r_hor,r_vert)           | ellipse from current to end, absolute coordinates, radii to hor and vert
+m| .ellipse(dx,dy,r_hor,r_vert)             | ellipse from current to end, relative coordinates, radii to hor and vert
+m| .ellipse(dx,dy,r_h,r_v,a_start,a_end,true)| extra parameters ellipse: startangle, endangle, counterclockwise? 
+m| .ellipse(dx,dy,r_h,r_v,deg rotation, axis[], counter? | extra parameters ellipse, rotation around axis defined as [x,y,z] array 
+m| .halfEllipseTo([x,y],r_min)              | half ellipse with r_min as sag, absolute coordinates    
+m| .halfEllipse(dx,dy,r_min)                | half ellipse with r_min as sag, relative coordinates
+|===
+
+These functions create only partial arcs. To create a circle you need to define two arcs as the start and endpoint may not be identical.The following code shows how to draft a circle. Note that the same can be achieved with the function `sketchCircle` or `drawCircle` (see next sections). 
+
+``` javascript
+const {draw, Sketcher} = replicad
+
+function main()
+{
+    let circle = new Sketcher("XY")
+    .halfEllipseTo([0,20],10)   // first half of circle, only one radius needed, long axis is defined by coordinates
+    .ellipseTo([0,0],10,10)     // second half, if r_min and r_max are equal this defines a circle
+    .close()
+    .extrude(5)
+
+    return circle
+}
+``` 
+
+The following code shows some examples of the methods to sketch arcs. Some general remarks on the creation of arcs: 
+
+* The arcs are always created in a clockwise direction. Only the `ellipse` method supports the counter-clockwise direction, but this results in a non-logic behaviour related to the other parameters that are passed to the function. For example, if you draw an arc 270 degrees clockwise, the result is a three quarter circle, if you draw the arc using the same parameters but anti-clockwise, the result is only a quarter of a circle. 
+
+* The definition of so-called sagitta arcs is equally difficult. Again it helps to start defining the sketch in a clockwise direction. When moving in a clockwise direction, the bulge or sag of the arc is to the left of the straight line between the two outer points of the arc when the value is positive. If you want the bulge to be on the other side, you have to define a negative value for this parameter. As shown in the small icon above, the dimension of the sag defines the distance between the straight line from the startpoint to the endpoint and the outside of the arc. So to represent a circle
+
+* A tangent arc is only tangent to the segment that directly precedes the arc. It will not be tangent to the line following the arc. If you want to create a fillet or rounding that is tangent to two segments, use the method `.customCorner(radius)` that is explained in the next section.
+
+---
+._Examples of arcs, created with code below_ 
+image::/images/arc-examples.png[]
+---
+
+``` javascript
+const {draw, Sketcher} = replicad
+
+function main()
+{
+    let r  = 10  // radius of arcs
+    let xr = 10 // x-coordinate
+    let yr = 10 // y-coordinate
+
+    let circle = new Sketcher("XY")
+    .ellipseTo([xr,yr],r,r)
+    .close()
+    .extrude(3)
+
+    let circle2 = new Sketcher("XY")
+    .movePointerTo([xr,yr])
+    .ellipseTo([0,0],r,r)
+    .close()
+    .extrude(2)
+    .translate([10,0,0])
+
+    let circle3 = new Sketcher("XY")
+    .ellipseTo([0,2*yr],r,r)
+    .ellipseTo([xr,yr],r,r)
+    .lineTo([0,yr])
+    .close()
+    .extrude(5)
+    .translate(-10,0,0)
+
+    let circle4 = new Sketcher("XY")
+    .ellipse(xr,yr,r,r,270,[0,0,1],false)
+    .lineTo([0,r])
+    .close()
+    .extrude(1)
+    .translate(0,-30,0)
+
+    let arc1 = draw()
+    .sagittaArc(-xr,yr,r)
+    .sagittaArc(xr,yr,-(10-Math.sqrt((r/2*r/2)+(r/2*r/2))))
+    .close()
+    .sketchOnPlane("XY")
+    arc1 = arc1.extrude(3).translate([40,0,0])
+
+    return [circle,circle2,circle3,circle4,arc1]
+}
+```
+
+
+=== Fillets and chamfers in 2D  
+Creating a rounded edge or fillet in sharp corners of your sketch can be achieved by calculating the parameters for the arc methods described in the previous paragraphs but can also be achieved with a specialized method called `customCorner(radius)`. This method uses the radius of the rounding as an argument and is applied to the corner defined by the last coordinate of the previous drawing command. The method should therefore be placed between the two methods used to define the corner. The following code snippet shows an example how to create a rounded shape. Note that in this case, using a rounding radius that is exactly half the height of the shape fails. If you want to achieve a semi-circle at each end you have to use the arc methods described in the previous section. 
+
+As the method has to be placed in between two methods that describe a sharp corner, the method can not be used as the last statement before closing or ending the sketch. In the example below this is solved to shift the startpoint for the definition of the rectangle from the first corner in the bottom left to somewhere along the first line (drawing counterclockwise). Another point worth noting is that when rounding sharp edges, as is done in the example below, the result might be different from what you expect. 
+
+---
+._Adding 2D fillets to a sketch_ 
+image::/images/fillet2D.png[width=400]
+---
+
+``` javascript
+const { draw } = replicad;
+
+const main = () => {
+  // just lines
+  const s1 = 
+  draw([20,0])
+    .hLine(30)
+    .customCorner(5.45)
+    .vLine(11)
+    .customCorner(5.45)
+    .hLine(-50)
+    .customCorner(3)
+    .line(5,-11)
+    .customCorner(5)
+    .close();
+
+return [
+    { shape: s1, color: "blue", name: "Straight lines" }
+]
+} 
+```
+
+The method `.customCorner(radius)` also supports creating chamfers. To achieve this you have to add a second argument to the method: `customCorner(radius, "chamfer")`. The default value of this argument is `"fillet"`, so it does not have to be added explicitly. The dimension of the chamfer describes the length of the straight line perpendicular to the lines that define the corner. In case of sharp corner it is difficult to predict where this corner will land and what will be the overall dimension of the resulting shape. 
+
+---
+._Adding 2D chamfers to a sketch_ 
+image::/images/chamfer2d.png[width=400]
+---
+
+``` javascript
+const { draw } = replicad;
+
+const main = () => {
+  // just lines
+  const s1 = 
+  draw([20,0])
+    .hLine(30)
+    .customCorner(5, "chamfer")
+    .vLine(11)
+    .customCorner(5.45)
+    .hLine(-50)
+    .customCorner(3,"chamfer")
+    .line(5,-11)
+    .customCorner(5, "chamfer")
+    .close();
+
+return [
+    { shape: s1, color: "blue", name: "Straight lines" }
+]
+} 
+
+```
+
+
+
+=== Free form curves
+
+image::/images/curves.png[width=650]
+
+Free form curves can be created with the methods listed below. 
+
+[cols="1,3",stripes=even]
+|===
+m| .bezierCurveTo([x,y],points[])                       | Bezier curve to end along points[]
+m| .quadraticBezierCurveTo([x,y],[x_ctrl,y_ctrl])       | Quadratic bezier curve to end with control point
+m| .cubicBezierCurveTo([x,y],p_ctrl_start,p_ctrl_end)   | Cubic bezier curve with begin and end control points 
+m| .smoothSplineTo([x,y],splineconfig)                  | smooth spline to end, absolute coordinates 
+m| .smoothSpline(dx,dy,splineconfig)                    | smooth spline to end, absolute coordinates 
+m|                                                      m| splineconfig = {startTangent:angle,endTangent:angle / "symmetric"}
+m| drawPointsInterpolation(array[[pt1],[pt2]..[ptn]])   | create a drawing of a curve that is an interpolation of all points in the array| 
+|===
+
+A Bezier curve is a type of curve that is defined by a set of control points. It was developed by French engineer Pierre Bezier for use in the design of Renault cars in the 1960s. The important feature of a Bezier curve is that the control points influence the shape of the curve, but the curve does not necessarily pass through these points. In case of a quadratic Bezier curve there is only one control point between the startpoint and endpoint of the curve which defines the direction of the curve at both ends. Using a cubic Bezier curve it is possible to adjust the slope of the curve at both ends. The control points may be considered as a kind of magnet, pulling the curve towards it. The further the control points are placed, the stronger the curve will deviate from a straight line between the begin and endpoints. The `.bezierCurveTo` method allows a large array of control points to define the shape of the curve, but adjusting these endpoints is difficult without being able to judge the effect of these points. 
+
+--- 
+._Illustration of different Bezier curves_
+image::/images/bezier_curves.png[width=700]
+---
+
+The `.smoothSpline` method defines a curve that passes through each point. The shape of the curve can be adjusted using the spline configuration. An example of the application of this function is shown in <<smoothspline>>. The startTangent and endTangent define the angle of the curve at its starting and end point. The factor defines how far the curve is drawn into the direction of the tangent. The larger the factor, the longer the curve wants to proceed in the direction of the specified tangent. 
+
+---
+._Example of the application of the smoothSpline method_
+[#smoothspline]
+image::/images/smoothsplinehook.png[800]
+---
+
+It is not always necessary to use the configuration at the begin and end point of a smoothSpline. In the example in <<mouse>> the `.smoothSpline` method is used between two arcs. The `smoothSpline` adapts to the tangent of the previous line segment. Without any previous line segment it uses a tangent of 0 degrees, i.e. in the x-direction (assuming a drawing area aligned with x,y coordinates). The smoothSpline does not adjust the endTangent to the next segment, so without any specification the endTangent is 0 degrees, along the x-axis. In <<mouse>> this yields the intended result without any additional configuration. 
+
+---
+._Using the smoothSpline between two arcs without config_
+[#mouse]
+image::/images/mouse.png[]
+---
+
+The code below illustrates how a `smoothSpline` curve is either tangent to the x-axis or follows the tangent of the previous line segment. It also demonstrates that with a factor of 2.63 the resulting curve is very close to a perfect arc.  
+
+---
+._Comparison of smoothSpline curves_
+image::/images/smoothspline.png[width=800]
+---
+
+[source, javascript]
+----
+const {draw} = replicad
+
+function main()
+{
+let spline = draw()
+.smoothSplineTo([20,0],
+{startTangent:50, startFactor: 1.8, 
+endTangent:-50, endFactor: 1.8}).done()
+
+let  spline2 = draw()
+.smoothSplineTo([10,5])
+.smoothSplineTo([20,0]).done()
+
+let spline3 = draw()
+.lineTo([0,0.1])
+.smoothSplineTo([10,5])
+.smoothSplineTo([20,0.4])
+.lineTo([20,0]).done()
+
+let spline4 = draw()
+.smoothSplineTo([0,10],
+{startTangent:180, startFactor: 2.63, 
+endTangent:0, endFactor: 2.63})
+.done().translate(10.0)
+
+let arc = draw()
+.threePointsArcTo([0,10],[-5,5])
+.done().translate(10,0)
+
+return [{shape: spline, color: "red"},
+{shape: spline2, color: "blue"},
+{shape: spline3, color: "green"},
+{shape: spline4, color: "black"},
+{shape: arc, color: "purple"}]
+}
+----
+
+The function `drawPointsInterpolation(array of points)` is a drawing function that draws a curve through all points listed in the array of 2D points. The code sample below shows an example how this function can be used to create the shape of an airfoil by creating an array that lists 2D points along the contour of the airfoil. Note that the curve starts and ends at the sharp trailing edge of the airfoil. The last point of the array has to be identical to the first point to create a closed curve for extrapolation. Closing the curve in another way is difficult this drawing is created with a function, not a method that can be followed by any of the other drawing methods listed above.   
+
+[source, javascript]
+----
+let chord = 100 
+let span  = 100
+let airfoilPointsLarge = airfoilPoints.map(function([x,y]){return [x*chord,y*chord]}) 
+let airfoil = drawPointsInterpolation(airfoilPointsLarge).sketchOnPlane("XZ");
+let wing = airfoil.extrude(span)
+----
+
+
+<<<
+
+=== Pre-baked sketches and drawings
+The methods described in the previous chapter contain the building blocks that can be used to create any sketch or drawing. To simplify the creation of standard shapes like rectangles, circles and ellipses, some standard functions are available in Replicad. The function encapsulates the process to create a sketch or drawing, so only using the function with the required parameters is sufficient to create a sketch. Note that the `draw()` functions still have to be placed on a plane before they can be used to create 3D shapes. 
+
+image::/images/baked-sketch.png[width=650]
+
+[cols="1,3",stripes=even]
+|===
+m| sketchRectangle(length,width)                    | create a sketch of a rectangle with length and width
+m| sketchRoundedRectangle(length,width,fillet,{plane:"XY",origin:dist/[point]})  | create a sketch of a rounded rectangle 
+m| sketchCircle(radius,{config})                    | create a sketch of a circle
+m| sketchEllipse(xRadius,yRadius,{planeConfig})     | create a sketch of an ellipse
+m| sketchPolysides(radius,numSides,sagitta?,{planeConfig})| create a sketch of a regular polygon, where the sides of the polygon are lines or arcs with a sag from the straight line. The radius is defined without the sagitta.  
+m| sketchText(string,{textConfig?},{planeConfig} | create a sketch of a text. The textConfig defines the fontFamily, fontSize, startX,startY 
+m| sketchFaceOffset(shape,thickness)                | create a sketch by defining an offset from an existing face in the scene
+m| sketchParametricFunction(function,{planeconfig},namedParameters?,approximation?| create a sketch of a parametric function
+|===
+
+Similarly as for the sketches, some pre-baked drawings are available to speed-up the creation of standard shapes. As the draw() object also allows boolean operations the creation of more complex shapes can be achieved by combining a number of standard shapes. 
+
+[cols="1,3",stripes=even]
+|===
+m| drawRoundedRectangle(length, width, radius) | Draw a rounded rectangle centered at [0,0] 
+m| drawSingleCircle(radius)                 | Creates the `Drawing` of a circle as one single curve. The circle is centered on [0, 0]
+m| drawCircle(radius)                       | 
+m| drawSingleEllipse(majRadius,minRadius)   | Creates the `Drawing` of an ellipse as one single curve. The ellipse is centered on [0, 0], with axes aligned with the coordinates.
+m| drawPolysides(radius, sidesCount,sagitta = 0) | Creates the `Drawing` of an polygon in a defined plane. The sides of the polygon can be arcs of circle with a defined sagitta. The radius defines the out radius of the polygon without sagitta. 
+m| drawText("text",{ startX: 0, startY: 0, fontSize: 16, fontFamily: "default" }| Draw a 2D text. The options can be used to adjust location, fontsize and font. 
+m| drawParametricFunction(function, {options}) | Draw a parametric function with variable t. With the option it is possible to adjust the number of intermediate points that are used { pointsCount : 400, start : 0, stop : 1 } and the type of approximation of the curve. 
+m| drawPointsInterpolation(points2D[],{approximationConfig:})  | Draw a bSpline through the array of points 
+|===
+
+
+=== Methods for drawings
+
+In the introduction to the chapter on sketches and drawings it was explained that drawings support some additional methods compared to sketches. These methods are listed in the following table. 
+
+[cols="1,3",stripes=even]
+|===
+m| .clone()                                 | create a copy of the shape 
+m| .offset(r)                               | create a 2D offset with radius r, shape is rounded with radius, negative inwards
+m| .mirror([center/dir],[origin],mode? )    | mode? "center" or "plane"  
+m| .translate(xDist,yDist)                  | translate the shape 
+m| .rotate(angle,[center])                  | rotate the shape
+m| .stretch(ratio,direction,origin)         | scale the shape in a single direction
+m| .cut(cuttingDrawing)                     | create a 2D boolean where the drawing listed as an argument to this method is subtracted from the drawing that this method is acting on.     
+m| .intersect(drawing)                      | create a 2D intersection between two drawings   
+m| .fuse(other)                             | create a 2D boolean where the drawing listed as an argument is fused to the drawing that this method is acting on
+m| .sketchOnFace(face,scaleMode)            | The scale mode is "original" for global coordinates, "bounds" for following UV of the receiving face or "native" for the default UV parameters of opencascade 
+m| .sketchOnPlane                           | place the drawing on a plane 
+m| .toSVG(margin)                           | format the drawing as an SVG image
+m| .toSVGPaths()                            | format the drawing as a list of SVG paths
+m| .toSVGViewBox                            | return the SVG viewbox that corresponds to this drawing
+|=== 
+
+The boolean operations `cut`, `fuse` and `intersect` provide options to shortcut the creation of complicated drawings without the need for complex geometric calculations. 
+Using boolean functions and the pre-baked drawings of a circle and rectangle, creating a shape like an axle with a keyway is very simple. Notice in de code below that a drawing needs to be placed on a plane before any other method can be applied to it. 
+
+``` javascript
+const { draw, drawCircle, drawRectangle} = replicad;
+
+const main = () => {
+let axleRadius = 11
+let keySlotHeight = 6
+let keySlotWidth  = 2.50  
+
+let axleHole = drawCircle(axleRadius)
+let axleHole2 = drawCircle(axleRadius).translate(3*axleRadius,0)
+let keySlot  = drawRectangle(2*keySlotWidth,keySlotHeight)
+.translate(-axleRadius,0)
+let keySlot2  = drawRectangle(2*keySlotWidth,keySlotHeight)
+.translate(-axleRadius,0).translate(3*axleRadius,0)
+let axleShape = axleHole.cut(keySlot).sketchOnPlane("XZ")
+let axleShape2 = axleHole2.fuse(keySlot2).sketchOnPlane("XZ",20)
+let axle = axleShape.extrude(25)
+let axle2 = axleShape2.extrude(25)
+
+  return [axle,axle2];
+};
+```
+
+---
+._Creating an axle with a keyway using 2D boolean functions on drawings_
+image::/images/keyway.png[]
+--- 
+
+The `.intersect()` method can be used to create shapes based on the intersection of two other shapes. An example is creating a curved slot (see image below). By intersecting a ring with a sector, only a segment of the ring remains. The rounded ends of the curved slot are then added by fusing circles at each end. 
+
+---
+._Creating a curved slot using an intersection and union of drawings_
+image::/images/sector_intersection1.png[width = 800]
+--- 
+
+The following code snippet shows the use of the 2D offset function. Offset only works on a closed curve. The curve is offset with radius r, positive values create an offset outward of the curve, negative values inward. When offsetting outward, the curve is automatically rounded with the radius r. In the code example a rounded rectangle is created by drawing a very thin rectangle, then applying an offset of 5 mm, resulting in a shape with a height of 10 mm and corners rounded with a radius of 5 mm. Then an additional shape is created with an offset of 2 mm. Finally the original shape is subtracted from the offset shape to create a thin walled shape.  
+
+[source, javascript]
+----
+const {draw} = replicad
+
+function main()
+{
+// frontview of receiver is just a rectangle with height 0.1 mm
+let frontView = draw()
+.movePointerTo([-20,7])
+.hLine(40)
+.vLine(0.1)
+.hLine(-40)
+.close()
+
+let contourBody = frontView.offset(5) // shape is offset with r=5
+let contourHolder = contourBody.offset(2) // holder is offset with r=2
+// not that drawings have to placed on plane before extruding
+let gpsFront = contourBody.sketchOnPlane("YZ")
+let holderFront = contourHolder.sketchOnPlane("YZ")
+let gpsReceiver = gpsFront.extrude(70)
+let gpsHolder = holderFront.extrude(72).cut(gpsReceiver)
+
+return [gpsReceiver,gpsHolder]
+}
+---- 
+
+---
+._Creating a thin walled shape with an offset_ 
+image::/images/offset2D.png[width=500]
+---
+
+
+
+
+
+
+<<<
+== Create 3D face/wire
+
+=== Create wires in 3D 
+In comparison to sketches which create wires or faces in 2D, the following functions create a wire in 3D. These wires can be used for example to create a 3-dimensional path for a sweep operation. This operation might be needed to create a tube that is bend in a 3-dimensional shape, such as the frame of a chair. 
+
+[cols="1,3",stripes=even]
+|===
+m| makeLine([point],[point])                                                |
+m| makeCircle(radius,[center],[normal])                                     |
+m| makeEllipse(major,minor,[center],[normal])                               |
+m| makeHelix(pitch,height,radius,[center],[dir],lefthand?)                  |
+m| makeThreePointArc([point1],[point2],[point3])                            |
+m| makeEllipseArc(major,minor,anglestart,angleEnd,[center],[normal],[xDir?])|
+m| makeBSplineApproximation([points[],{tolerance:,smoothing,degMax:6,degMin:1,BSplineApproximationConfig={}])                                     |
+m| makeBezierCurve([points[]])                                                 |
+m| makeTangentArc([startPoint],[tangentPoint],[endPoint])                      |   
+m| assembleWire([Edges])                                                        |
+|===
+
+=== Create faces in 3D
+
+You can not only create wires in 3D but also complete faces. The difference between a wire and a face is that a face consists of a sketch or 3D wire that encloses a surface. This surface can be flat but also bend in space. 
+
+[cols="1,3",stripes=even]
+|===
+m| makeFace(wire)                           | Create a face from a wire consisting only of edges
+m| makeNewFaceWithinFace(face,wire)         |
+m| makeNonPlanarFace(wire)                  | Create a curved surface from a non-planar wire
+m| makePolygon(points[])                    | Create a face from an array of points in a plane
+m| makeOffset(face,offset,tolerance)        | Create an offset to a face
+m| makePlaneFromFace()                      | Extend a face out to an infinite plane parallel to this face
+m| makeSolid(faces[]/shell)                 | Create a solid from the volume that is defined by the array of faces or by a surface. 
+|=== 
+
+The following code example demonstrates how faces in 3 dimensions can be created using a quite complicated algorithm. In this example, the faces consisting of triangular surfaces are assembled in such a way that they completely enclose a volume, without leaving a gap. Using the method `makeSolid` the volume enclosed by these faces can then be converted to a solid. In the image below this is demonstrated by cutting a sphere out of the newly created shape. Note that without this final step, the faces represent infinitely thin surfaces floating in space. This might be sufficient to create a 3D shape for visualization, but does not allow 3D printing the object. The next section will explain the concept of shapes (solids) in more detail. 
+
+image::/images/icosahedron2.png[]
+
+``` javascript
+function projectOnSphere(radius, vertex) {
+  // function to project a vertex on to a sphere with radius "radius"
+  let x = vertex[0];
+  let y = vertex[1];
+  let z = vertex[2];
+  let currentRadius = Math.sqrt(
+    Math.pow(x, 2) + Math.pow(y, 2) + Math.pow(z, 2)
+  );
+  let scale = radius / currentRadius;
+  let scaledVertex = [scale * x, scale * y, scale * z];
+  return scaledVertex;
+}
+
+const icosahedronFaces = (radius) => {
+  let golden = (1 + Math.sqrt(5)) / 2;
+
+  let v = [
+    // vertices determined by 4 rectangles
+    projectOnSphere(radius, [-1, golden, 0]),
+    projectOnSphere(radius, [1, golden, 0]),
+    projectOnSphere(radius, [-1, -golden, 0]),
+    projectOnSphere(radius, [1, -golden, 0]),
+
+    projectOnSphere(radius, [0, -1, golden]),
+    projectOnSphere(radius, [0, 1, golden]),
+    projectOnSphere(radius, [0, -1, -golden]),
+    projectOnSphere(radius, [0, 1, -golden]),
+
+    projectOnSphere(radius, [golden, 0, -1]),
+    projectOnSphere(radius, [golden, 0, 1]),
+    projectOnSphere(radius, [-golden, 0, -1]),
+    projectOnSphere(radius, [-golden, 0, 1]),
+  ];
+
+  // faces added so that they always have an edge in common
+  // with the previous ones
+  return [
+    [v[0], v[11], v[5]],
+    [v[0], v[5], v[1]],
+    [v[0], v[10], v[11]],
+    [v[0], v[7], v[10]],
+    [v[5], v[11], v[4]],
+    [v[4], v[9], v[5]],
+    [v[3], v[9], v[4]],
+    [v[3], v[8], v[9]],
+    [v[3], v[6], v[8]],
+    [v[3], v[2], v[6]],
+    [v[6], v[2], v[10]],
+    [v[10], v[7], v[6]],
+    [v[8], v[6], v[7]],
+    [v[0], v[1], v[7]],
+    [v[1], v[5], v[9]],
+    [v[11], v[10], v[2]],
+    [v[7], v[1], v[8]],
+    [v[3], v[4], v[2]],
+    [v[2], v[4], v[11]],
+    [v[9], v[8], v[1]],
+  ];
+};
+
+const main = (
+  { makeSolid, sketchRoundedRectangle, makeSphere, makePolygon },
+  {}
+) => {
+  function makeIcosahedron(radius) {
+    const faces = icosahedronFaces(radius).map((f) => makePolygon(f));
+    return makeSolid(faces);
+  }
+
+  // draw the isosphere
+  let icosahedron = makeIcosahedron(2.0).scale(50);
+  const sphere = makeSphere(100).translate([90, 30, 20]);
+  
+  // cut the icosahedron with a sphere to demonstrate that the first 
+  // shape is indeed a solid, no longer collection of faces
+  icosahedron = icosahedron.cut(sphere)
+
+  let shapes = [
+  {shape: icosahedron, name: "icosehadron", color: "steelblue"}
+  ]
+  return shapes;
+};
+
+```
+
+
+
+<<<
+
+== Create shapes
+
+A shape in OpenCascade is a 3D volume that is closed. Closed means that the infinitely thin surfaces that build the shape enclose the volume completely. The shape may therefore also be considered as a solid. 
+
+image::/images/thickness.png[width=800]
+
+The generic command to create a 3D shape from a 2D sketch is based on adding thickness. This can be performed using the following basic command, where the method `thicknessMethod` has to be replaced with any of the methods listed in the table below. 
+
+[source,javascript]
+----
+let shape = sketch.thicknessMethod
+----
+
+The following `.thicknessMethods` are available to add thickness or volume to a 2D sketch: 
+
+[cols="1,3",stripes=even]
+|===
+m| .extrude(distance,extrusionConfig?)  | extrude a face over a distance normal to the face. In the extrusion configuration it is possible to define a different extrusion direction, a certain profile for the extrusion and a twist over the extrusion. 
+m|             {extrusionDirection:[point], ExtrusionProfile:ExtrusionProfile,  origin:[point], twistAngle:deg} | extrusionConfig
+m|             {profile:"linear" / "s-curve", endFactor: scale}  | extrusionProfile       
+m| .loftWith([otherSketches],loftConfig,returnShell?) | build a solid through lofting between different wires
+m|               {   endPoint:[point],
+                                        ruled: boolean,
+                                    startPoint:[point]} | loftconfig
+
+m| .revolve(revolutionAxis:[point],config?)    | revolve a face around the z-axis to create a solid shape. Adapt the axis of rotation and the origin in the configuration. 
+m|             origin:[point]                   |config                            
+m| .sweepSketch( (plane, origin) => sketchFunction(plane,origin) ); |  Sweep the sketch defined by the sketchFunction along the sketch used as the object for this method.
+m| .face()                              | This is not really a thickness method  but a method to create the first surface from a sketch or drawing. Note that this method is not needed in most cases as a closed sketch already is translated into a face that can be used directly for extrusion, revolving or sweeping. 
+m| makeSolid(faces[]/shell)                                     | Create a solid from the volume that is defined by the array of faces or by a surface. 
+|===
+
+The `sketchFunction` used in the `.sweepSketch()` can be derived from either a standard sketching function, such as `sketchRectangle(2, 30, { plane, origin })` or by defining your own closed sketch using a `Sketcher` object. This object should then refer to a `(plane, origin)` like this: 
+
+
+[source,javascript]
+----
+            function sketchFunction(plane,origin) 
+            {let section = new Sketcher(plane,origin)
+                    (add sketch commands)
+                    .close()
+            return section}
+---- 
+
+
+=== .extrude()
+
+=== .loftWith()
+
+
+=== .revolve()
+
+
+=== makeSolid()
+
+The `makeSolid` function can be used to create a solid from a number of faces. The faces need to enclose a volume without any gap. The following code example shows how to create a so-called antiprism. The model represents the One World Trade Center.  
+
+``` javascript
+const {draw, drawRectangle, makePolygon, makeSolid} = replicad;
+
+function main()
+{
+let bL = 200/10;  // base length is 200 ft
+let h = 1368/10;  // height 1368 ft
+let m = (60/0.3048)/10; // first 60 meters are straight, converted to feet
+
+    function antiPrism(bLength,prismHeight,endScale)
+    {
+        let bL = bLength/2;
+        let tL = bL/Math.sin(Math.PI/4)
+        let base=[]
+        base[1] = [-bL,-bL,0];
+        base[2] = [bL,-bL,0];
+        base[3] = [bL,bL,0];
+        base[4] = [-bL,bL,0];
+        base[5] = base[1]   // trick to avoid need for modulus 4
+
+        let top=[]
+        top[1] = [0  ,-tL*endScale ,prismHeight]
+        top[2] = [tL*endScale  , 0  ,prismHeight]
+        top[3] = [0 ,tL*endScale  ,prismHeight]
+        top[4] = [-tL*endScale ,0   ,prismHeight]
+        top[5] = top[1]    // trick to avoid need for modulus 4
+
+        let face=[]
+        face[1] = makePolygon([base[1],base[4],base[3],base[2]]);        
+        // not defined counterclockwise to have face facing in negative z-direction
+        for (let i=2 ; i<=8; i+=2)
+            {
+            face[i]     = makePolygon([top[i/2],base[i/2],base[i/2+1]]);
+            face[i+1]   = makePolygon([base[i/2+1],top[i/2+1],top[i/2]]);
+            }
+        face[10] = makePolygon([top[1],top[2],top[3],top[4]]);
+        return face;
+        }
+let faces = antiPrism(bL,h,Math.sin(Math.PI/4));
+let tower = makeSolid(faces).translate(0,0,m);
+let towerbase = drawRectangle(bL,bL).sketchOnPlane("XY").extrude(m)
+tower = tower.fuse(towerbase)
+return tower}
+``` 
+
+
+
+
+== Pre-baked shapes
+
+[cols="1,3",stripes=even]
+|===
+m| makeCylinder(radius,height,[location],[direction])           |create a cylinder
+m| makeBaseBox(xLength,yLength,zLength)                         |create a box
+m| makeSphere(radius)                                           |create a sphere
+m| makeVertex([point])                                          |create a vertex/point
+|===
+
+---
+._Combining shapes to create more complex shapes_ 
+[#img-mm2023-parts]
+image::/images/mm2023-parts.png[]
+---
+
+As shown in <<img-mm2023-parts>> it is possible to create quite complicated parts by just combining simple shapes such as boxes, spheres and cylinders. The shape used in this image is an exercise called Model Mania organized by the company that created the Solidworks CAD program. There are only some fillets missing which were obviously too complicated for the OpenCascade modelling kernel. The shapes are combined using the boolean operations decribed in <<Combine shapes>>. Some of the edges of the basic shapes were rounded. How this can be achieved is explained in <<Modify shapes>>. The result is shown in the image below.  
+
+---
+._Result of combining the shapes_ 
+[#img-mm2023-complete]
+image::/images/mm2023-complete.png[]
+---
+
+
+
+<<<
+== Modify shapes
+
+[cols="1,3",stripes=even]
+|===
+m| .fillet(radiusConfig,filter?)                                    | round an edge of a shape with a fixed radius or a radius that is defined by a function. The filter refers to the selection mechanism defined in the next secion. It has the general shape of (e) => e.inDirection("X")  
+m| .chamfer(radiusConfig,filter?)                                   | take of a sharp edge by creating a transitional face, default at 45 degrees to a edge
+m| .shell(thickness, (f) => f.inPlane("YZ",-20),{tolerance:number}) | create a thin walled object from a shape, removing the indicated face from the shape to provide access to the hollow inside. 
+m| makeOffset(shape,thickness)                                      | create a shape that is offset from the original shape by the thickness. A positive number results in an increased size of the shape, a negative value will result in a smaller shape
+m| addHolesInFace(face,holeWires[])                                 | create a hole in a shape using the wires that are indicated in the parameters to this function. 
+|===
+
+[NOTE]
+====
+Users of OpenCascade, the 3D kernel used by Replicad, have noticed that fillets may often cause the program to fail. This may result in a broken geometry (which will be reported as errors in other 3D applications such as slicers for 3D printers), or in the crash of the program. The best approach reported is: 
+
+* if possible, try to add the fillets already in the sketching stage. There is no fillet command for sketches, but you can define arcs instead of sharp corners;
+* try to add the fillets to a completed shape as late as possible;
+* when a fillet fails, try to reduce the fillet size. OpenCascade cannot handle situations where a fillet completely removes an adjacent face. If you want to design such a geometry, try to find a different modelling approach to get the same result. 
+* inspect the shape closely after filleting to determine if there are faces missing. This is a clear indicator for socalled non-manifold geometry, i.e. geometry that does not fully enclose a volume. 
+====
+
+
+== Find features
+In the previous section, some methods were described to change a shape. Most of these methods require a face or edge of a shape as parameter. Faces are relevant to create a thin walled object (shell) or to create holes in a face. Finding edges is relevant to create rounded edges (fillets) or chamfers. The next paragraphs explain how these faces or edges can be selected. 
+
+=== Faces
+
+Faces can be selected using a `FaceFinder` object or using the so-called arrow notation of javascript. The arrow notation is a shorthand notation to define a function that changes the value of a given parameter. The following code explains this in more detail:  
+
+[source, javascript]
+----
+// create a variable as a new object to which a selection-method is applied
+let foundFaces = new FaceFinder().inPlane("XZ",35)
+// use this variable as an input to create a shell 
+let hollowShape = solidShape.shell(thickness, (f)=>foundFaces,{tolerance:number})
+
+// use the arrow notation to select a face directly as parameter to a method to change a shape 
+let hollowShape = solidShape.shell(thickness, (f) => f.inPlane("YZ",-20),{tolerance:number})
+----
+
+The following methods to select faces are available: 
+
+[cols="1,3",stripes=even]
+|===
+m| .inPlane("XZ",35)                                                            | select all faces that are positioned in a given plane and offset
+m| .parallelTo(plane/face/standardplane)                                        | select a face parallel to a given plane or face
+m| .ofSurfaceType("CYLINDRE")                                                   | select all faces of a certain type
+m| "PLANE" / "CYLINDRE" / "CONE" /"SPHERE"/ "TORUS" / "BEZIER_SURFACE"       /"BSPLINE_SURFACE"/"REVOLUTION_SURFACE"/"EXTRUSION_SURFACE"/ "OFFSET_SURFACE"/"OTHER_SURFACE"                                                | surface types to use with surfaceType selector 
+m| .containsPoint([0,-15,80])                                                   | select a face that contains a given point
+m| .atAngleWith(direction,angle)                                                | select a face at a certain angle to an axis or plane atAngleWith("Z",20)
+m| .atDistance(distance,point)                                                  | select a face at a given distance to a point 
+m| .inBox(corner1,corner2)                                                      | select a face that is partially located inside the given box
+m| .inList(elementList[])                                                       | select a face that is in the elementList
+m| find(shape,options), options {unique: true}                                  | returns all the elements that fit the filters
+|===
+
+<<<
+=== Edges
+
+
+[cols="1,3",stripes=even]
+|===
+m| .inDirection([x,y,z]/"X"/"Y"/"Z")                     | find all edges that have the direction
+m| .atAngleWith(direction,angle)                        | atAngleWith("Z",20)
+m| .ofLength(number)                                    | find all edges with a particular length
+m| .containsPoint([0,-15,80])                           | find edges that go exactly through a point
+m| .atDistance(distance,point)                          | same as .containsPoint but allows some margin around the defined point 
+m| .inBox(corner1,corner2)                              | finds all edges that are (partly) within a box
+m| .inList(elementList[])                               | see issue https://github.com/sgenoud/replicad/issues/13, does not work yet
+m| .inPlane(inputPlane,origin)                          | inPlane("XY",30), find all edges that are exactly in the defined plane
+m| .ofCurveType(       )                                | find all edges of a certain curve type. "LINE", "BSPLINE_CURVE", "CIRCLE"
+m| .parallelTo(plane / StandardPlane e.g. "XY")         | find all edges parallel to a stanadard plane
+m| .shouldKeep todo?                                    | tbd
+|===
+
+[NOTE]
+====
+When you reference faces or edges with their index, using the `.inList` method, you may experience the issue of the Topological Naming Problem. If the change to the design parameters results in a changing number of edges or faces, the fillet will no longer be applied to the correct edges. So use this method with care, if you only allow minor changes to the design such as using a different tolerance between two parts. Note that this selector currently does not work as expected, see issue https://github.com/sgenoud/replicad/issues/13. 
+
+
+====
+
+
+=== Combine filters
+
+[cols="1,3",stripes=even]
+|===
+m| and                                                  | both filters should be applied
+m| either                                               | only one of the filters may be applied
+m| not                                                  | select all other edges than those selected by this filter
+|===
+
+[source, javascript]
+----        
+            const houseSides = new FaceFinder().either([
+            (f) => f.inPlane("YZ", 50),
+            (f) => f.inPlane("YZ", -50),]);
+     
+             const frontWindow = new EdgeFinder()
+            .ofCurveType("CIRCLE")
+            .not((f) => f.inPlane("XZ"));  
+----
+
+Below is an example how finders can be combined in the definition of a fillet. 
+
+[source, javascript]
+----        
+let axleShape2 = axleHole2.fuse(keySlot2).sketchOnPlane("XZ",20)
+let axle2 = axleShape2.extrude(25)
+            .fillet(2,(e)=>e.either([
+                          (e)=>e.inPlane("XZ",45),
+                          (e)=>e.inPlane("XZ",20)]) )
+return [axle2];
+----
+
+
+
+
+== Transform shapes
+
+The transform functions require a shape or face. A sketch cannot be transformed, with the exception of creating an offset. 
+
+transformedShape = shape."transformCommand"
+
+[cols="1,3",stripes=even]
+|===
+m| "transformCommand = "                                |
+m| .translate([dx,dy,dz])                               |
+m| .translateX(dx)                                      |
+m| .translateY(dy)                                      |
+m| .translateZ(dz)                                      |
+m| .rotate(angleDeg,axisOrigin[x,y,x],axisEnd[x,y,x])   |
+m| .scale(number)                                       |
+m| .mirror("YZ",[-10,0])                                |
+m| .clone()                                             | 
+|===
+
+
+
+
+
+
+<<<
+== Combine shapes
+
+image::/images/booleans-icons.png[width=500]
+
+[cols="1,3",stripes=even]
+|===
+m| .cut(tool,optimisation?)     | cut the tool-shape from the shape, if needed you can add an optimisation directive to the function call, optimisation? = {optimisation:"none" / "commonFace" / "sameFace"}   
+m| .fuse(otherShape,.. )                                            | fuse the othershape with the shape. Other applications call this a "union" between to shapes
+m| .intersect(tool)                                                 | find the volume that is common to the two shapes considered in this method, other applications call this function "common"
+m| compoundShapes(shapeArray[])                                     | this function is identical to makeCompound 
+m| makeCompound(shapeArray[])                                       | allows to combine an array of any type of shape into a single entity that can be displayed.  
+|===
+
+
+<<<
+== Installing Replicad locally
+
+When you want to use Replicad you can go to the website https://studio.replicad.xyz/workbench. Here you can edit and run your script. However, it depends on having an internet connection and on the external server running. If you prefer to run the application locally you have two options, namely installing the program directly as a web-application or installing it from the source on the github page. 
+
+=== Running Replicad Studio as a webapplication
+
+Running the Replicad studio as a web application is extremely easy. For this to work you need to use the Chrome web browser that is available at https://www.google.com/chrome/.  Open the website https://studio.replicad.xyz/workbench in Chrome browser and look for the icon in your browser to install the application as a socalled Progressive Web Application (PWA). 
+
+image::/images/install_webapp.png[]
+
+When you click this icon, a small application is installed on your computer. For MacOs the location is in your home directory in the folder `Applications\Chrome Apps\`. If you want to manage the apps, go to the address `chrome://apps`. Here you see all applications that are installed in the Chrome browser. You can create a shortcut to the app and indicate whether the app should run inside the browser or in a separate window. The last option is enabled by default. If you want to remove the application you can use the same address. 
+
+image::/images/manage_pwa.png[]
+
+Google describes a Progressive Web App as follows: 
+
+> A Progressive Web App (PWA) is an app built for the web that provides an experience similar to a mobile app. PWAs are fast and offer many of the features available on mobile devices. For example, they can work offline and send notifications. 
+
+There is also a warning that not all applications might be fully functional without an internet connection. In case of Replicad it seems to work. 
+
+[NOTE]
+====
+In the version of September 2023 there are some issues noticeable when working for a longer period without internet connection. The editor window of the workbench no longer functions (on Windows OS) and the visualizer no longer reacts automatically upon changes of the source file. Restarting the visualizer is a workaround. 
+====
+
+=== Install local server
+
+Replicad is an open source project that you can download completely from the github website https://github.com/sgenoud/replicad. The application is written in javascript, so it cannot be compiled to an executable directly. Instead you have to take the files and run it as if it were a website. One approach to achieve this is as follows: 
+
+1. Go to the website https://nodejs.org/en and download the version of `nodejs` that is valid for your operating system. 
+2. Install the nodejs platform on your computer. When the installation is complete you will see a dialog that both `nodejs` and `npm` are installed on your computer. `nodejs` is an open-source, cross-platform JavaScript runtime environment. `npm` is a package manager for `nodejs` javascript packages. The company is now owned by Github which in turn is owned by Microsoft. 
+3. Download the source code of Replicad from the github page. You can do this either using `git` (when you use the terminal window and have `git` installed you can issue the command `git clone git@github.com:sgenoud/replicad.git`) or by downloading the git repository in a large zip-file.  
++
+image::/images/download_repository.png[]
++
+4. Unpack the zip file somewhere in your home directory, creating a new folder. Within this folder, go to a folder that contains the code for the `studio`. Copy the folder called `studio` somewhere else in your home directory. 
+5. Open a terminal windows and issue the following commands: 
+
+``` sh
+cd studio
+npm install
+npm start
+```
+
+The first command only works if you have placed the folder with the source code directly in your home directory. Else you have to issue the `cd` command with the complete path to the folder location. The next command, `npm install` starts the building and installing process for the application. It uses the file `package.json` in the folder where the command is issued to determine which actions should be performed. Installing the application can take quite some while. Just wait patiently until the process is completed. Then issue the next command `npm start`. This command starts the webserver with the application that you just created. You can open a browser window with the address http://localhost:5555/ . (If you want to go to the workbench directly, enter the address `http://localhost:5555/workbench`). You can also use the shortcut from the terminal window by pressing the `o`-key. 
+
+You have to keep your terminal window open. 
+
+image::/images/npm_start.png[]
+
+When you want to stop the application you can issue ```ctrl```-```c``` in the terminal window or use the shortcut ```q```-key. At first it might seem that you browser window is still working, but as soon as you refresh the page you will receive the message that the website is no longer responding. 
+
+[CAUTION]
+====
+There is a large difference in required file size between the two methods to run replicad locally. When you use the Progressive Web Application in Google Chrome, a small app of about 1.8 Mbyte is added to your file system. When you download the code of Replicad, the complete source code fits in an archive (zip-format) of 6.9 Mbyte. When you extract the directory `studio` this has a size of almost 30 Mbyte. After building the application using `Nodejs` and `npm` the directory has a size of 471 Mbyte!
+====
+
+
+== OpenCascade 3D kernel
+
+CascadeStudio uses the OpenCascade 3D modelling CAD (computer aided design) kernel. This is the same kernel that is used in the FreeCad application. In many respects therefore the output of CascadeStudio is comparable to FreeCad. Note however that Replicad uses a port of the OpenCascade kernel to javascript, called opencascadejs (see https://github.com/donalffons/opencascade.js). The functions in this library are explained at https://ocjs.org/. There are Replicad functions that are close to the opencascade kernel but also more user friendly functions that shield the user from the complexity of this library. 
+
+The OpenCascade kernel was developed originally by a set of people that started as part of Matra Datavision. Their first CAD system called Euclid was already developed in 1980. This software has evolved an in the passing years the company changed hands several times, first to Areva, then EADS and since 2014 it is part of Capgemini.
+
+The name Cascade is derived from CAS.CADE (Computer Aided Software for Computer Aided Design and Engineering). In 1999 Matra Datavision published CAS.CADE in open source on the Internet as Open CASCADE later renamed to Open CASCADE Technology.
+
+https://www.opencascade.com/
+
+It is interesting to note that the number of 3D kernels used worlwide is rather limited. The most well-known kernels are:
+
+* ACIS by Spatial
+* ShapeManager by Autodesk, which is in fact a fork from ACIS
+* CGM (Convergence Geometric Modeller) also by Spatial and used in the famous CATIA software.
+* Parasolid by Siemens
+* C3D Toolkit by C3D Labs
+* Open CASCADE
+
+There are also kernels used for socalled Nurbs modelling, used by software packages such as Rhino and Moi3D (Moment of Inspiration). These kernels also use the BRep approach where the surfaces are described by socalled Non-Uniform Rational B-Splines (NURBS). The advantage of NURBS is that these are capable to describe both complex shapes and simple geometric shapes like lines and arcs.
+
+Sometimes it is argued that a proper 3D kernel has infinite accuracy as the shapes are defined by mathematical equations that are continuous. While this seems a reasonable assumption, we should also consider how the 3D shape is used. During the creation of the part the person constructing the part uses a visualisation of the part on the computer screen. To produce this visualisation, the computer has to calculate the position of points and edges. This is not done with infinite accuracy. In CascadeStudio there is a slider that determines the "mesh-resolution". The default setting is 0.10 and provides a smooth image. If we increase the mesh-resolution, the mesh-resolution becomes in fact more coarse and circles show straight segments. 
+
+After the design the part is often exported to a 3D printer or CNC machine in a socalled STL (stereolithography) model. In the STL format the shape is again represented by small faces. The granularity or resolution of these faces can often be indicated during the export. The smaller the resolution, the longer an export will take and the larger the resulting file will be. If the resolution of the produced file is visible in the end-product is determined both by the resolution of the data used to control the machine that is producing the part (or the mold for a part) and by the manufacturing process. For example, if a CNC (computer numerical control) mill is used to produce a part, the inner radii are often determined by the diameter of the tool that is used to mill the product. The radius will be very smooth as it is produced by a revolving tool (the socalled end-mill). 
+
+If you want to know more on manufacturing techniques, many resources can be found on the internet. At https://www.making.unsw.edu.au/learn/ there are some short tutorials on different manufacturing techniques to produce your own part. 
+
+== New functions
+
+=== Define points based on directions and distances
+
+[source, javascript]
+----
+function Polar(currentPoint,distance,angleDegToX)
+{
+    let newPoint = [];
+    let angleRad = angleDegToX * Math.PI/180;
+    newPoint[0]  = currentPoint[0] + distance * Math.cos(angleRad);
+    newPoint[1]  = currentPoint[1] + distance * Math.sin(angleRad);
+    return newPoint
+}
+
+function PolarX(currentPoint,xdistance,angleDegToX)
+{
+    let newPoint = [];
+    let angleRad = angleDegToX * Math.PI/180;
+    newPoint[0]  = currentPoint[0] + xdistance;
+    newPoint[1]  = currentPoint[1] + xdistance * Math.tan(angleRad);
+    return newPoint
+}
+
+function PolarY(currentPoint,ydistance,angleDegToX)
+{
+    let newPoint = [];
+    let angleRad = angleDegToX * Math.PI/180;
+    newPoint[0]  = currentPoint[0] + ydistance/Math.tan(angleRad);
+    newPoint[1]  = currentPoint[1] + ydistance;
+    return newPoint
+}
+----
+
+=== Circles joined with tangent lines
+
+This function can be used to draw to circle-arcs connected with tangent lines, as an outline for a lever or a droplet. The circle with `radius1` is centered on the origin, the second arc is centered along the x-axis at a distance called `distance`. 
+
+---
+._Creating a drop shape for a lever_
+image::/images/drop.png[]
+--- 
+
+
+[source, javascript]
+----
+function dropView(radius1, radius2, distance)
+{
+    let sinus_angle = (radius1 - radius2) / distance
+    let angle = Math.asin(sinus_angle);
+
+    // points of outer contour of the lever
+    let p1 = [radius1 * Math.sin(angle), radius1 * Math.cos(angle)];
+    let p2 = [distance + radius2 * Math.sin(angle), radius2 * Math.cos(angle)];
+    let p3 = [distance + radius2, 0];
+    let p4 = [distance + radius2 * Math.sin(angle), - radius2 * Math.cos(angle)];
+    let p5 = [radius1 * Math.sin(angle), - radius1 * Math.cos(angle)];
+    let p6 = [- radius1, 0 ];
+
+    let dropDrawing = draw(p1)
+                    .lineTo(p2)
+                    .threePointsArcTo(p4,p3)
+                    .lineTo(p5)
+                    .threePointsArcTo(p1,p6)
+                    .close();
+    
+    return dropDrawing}
+----
+
+
+
+
