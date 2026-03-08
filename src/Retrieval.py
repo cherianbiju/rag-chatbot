@@ -7,7 +7,6 @@ from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 from pinecone import Pinecone
-from llama_index.llms.google_genai import GoogleGenAI
 from typing import Optional
 
 load_dotenv()
@@ -94,7 +93,7 @@ def get_embedding(text: str, retries: int = 3) -> Optional[list]:
 # QUERY EXPANSION  (Gemini)
 # ─────────────────────────────────────────────
 
-def expand_query(raw_query: str, llm) -> str:
+def expand_query(raw_query: str) -> str:
     expansion_prompt = f"""You are a CAD expert helping retrieve Replicad JavaScript CAD code from a vector database.
 
 Each stored document was embedded with this prefix style:
@@ -114,8 +113,10 @@ Rewritten:"""
 
     print(f"  🧠 Expanding query...")
     try:
-        response = llm.complete(expansion_prompt)
-        expanded = response.text.strip()
+        result = call_llm(expansion_prompt)
+        if not result:
+            return raw_query
+        expanded = result.strip()
         print(f"  📝 Expanded: {expanded[:120]}...")
         return expanded
     except Exception as e:
@@ -127,10 +128,10 @@ Rewritten:"""
 # RETRIEVAL
 # ─────────────────────────────────────────────
 
-def retrieve_example(query: str, index, llm) -> Optional[dict]:
+def retrieve_example(query: str, index) -> Optional[dict]:
     print(f"\n🔍 Searching for similar example...")
 
-    expanded_query = expand_query(query, llm)
+    expanded_query = expand_query(query)
 
     embedding = get_embedding(expanded_query)
     if embedding is None:
@@ -346,19 +347,41 @@ Return ONLY the corrected javascript code. No explanation. No markdown fences.""
 
 
 # ─────────────────────────────────────────────
-# LLM CALL  (Gemini)
+# LLM CALL  (native Gemini — no LlamaIndex)
 # ─────────────────────────────────────────────
 
-def call_llm(prompt: str, llm, max_retries: int = 5) -> Optional[str]:
+def call_llm(prompt: str, system_prompt: str = "", max_retries: int = 5) -> Optional[str]:
+    global gemini_embed_client
     for attempt in range(max_retries):
         try:
             if attempt > 0:
                 time.sleep(5)
-            start    = time.time()
-            response = llm.complete(prompt)
-            elapsed  = time.time() - start
+            start = time.time()
+
+            contents = []
+            if system_prompt:
+                contents.append(types.Content(
+                    role="user",
+                    parts=[types.Part(text=f"[SYSTEM]\n{system_prompt}\n[/SYSTEM]\n\n{prompt}")]
+                ))
+            else:
+                contents.append(types.Content(
+                    role="user",
+                    parts=[types.Part(text=prompt)]
+                ))
+
+            response = gemini_embed_client.models.generate_content(
+                model=LLM_MODEL,
+                contents=contents,
+                config=types.GenerateContentConfig(
+                    temperature=0.1,
+                    max_output_tokens=65536,
+                ),
+            )
+            elapsed = time.time() - start
             print(f"  LLM completed in {elapsed:.1f}s")
             return response.text
+
         except Exception as e:
             err = str(e)
             if ("429" in err or "RESOURCE_EXHAUSTED" in err) and attempt < max_retries - 1:
@@ -392,7 +415,7 @@ def prompt_input(message: str) -> str:
 # ERROR FIX LOOP  (terminal mode only)
 # ─────────────────────────────────────────────
 
-def error_fix_loop(code: str, api_rules: str, llm) -> str:
+def error_fix_loop(code: str, api_rules: str) -> str:
     current_code = code
     attempt = 0
 
@@ -429,7 +452,7 @@ def error_fix_loop(code: str, api_rules: str, llm) -> str:
         print(f"\n🔧 Fixing (attempt {attempt}/{MAX_FIX_ATTEMPTS})...")
 
         fix_start  = time.time()
-        fixed_code = call_llm(build_fix_prompt(error_message, current_code), llm)
+        fixed_code = call_llm(build_fix_prompt(error_message, current_code))
         print(f"  ⏱️  Fix took {time.time() - fix_start:.1f}s")
 
         if not fixed_code:
@@ -461,22 +484,13 @@ def setup():
     else:
         print(f"  ⚠️  System prompt not found at {SYSTEM_PROMPT_PATH} — continuing without it")
 
-    llm = GoogleGenAI(
-        model=LLM_MODEL,
-        api_key=GEMINI_API_KEY,
-        temperature=0.1,
-        request_timeout=300,
-        max_retries=3,
-        system_prompt=system_prompt,
-    )
-
-    init_gemini_embedding()
+    init_gemini_embedding()   # initializes gemini_embed_client (used for both embedding + LLM)
 
     pc    = Pinecone(api_key=PINECONE_API_KEY)
     index = pc.Index(CODE_INDEX_NAME)
 
     print("✅ RAG ready\n")
-    return llm, index, system_prompt
+    return index, system_prompt
 
 
 # ─────────────────────────────────────────────
@@ -485,7 +499,7 @@ def setup():
 # fix_loop=False → Streamlit mode
 # ─────────────────────────────────────────────
 
-def run_query(user_input: str, llm, index, system_prompt: str = "", fix_loop: bool = True):
+def run_query(user_input: str, index, system_prompt: str = "", fix_loop: bool = True):
     print("\n" + "=" * 70)
     print(f"QUERY: {user_input}")
     print("=" * 70)
@@ -495,7 +509,7 @@ def run_query(user_input: str, llm, index, system_prompt: str = "", fix_loop: bo
         print("⚠️  API rules empty — LLM will use own knowledge only")
 
     # If similar found → use file to generate, else → use api_rules + LLM
-    example = retrieve_example(user_input, index, llm)
+    example = retrieve_example(user_input, index)
     prompt  = build_prompt(user_input, api_rules, example, system_prompt)
 
     print(f"\n{'=' * 70}")
@@ -505,7 +519,7 @@ def run_query(user_input: str, llm, index, system_prompt: str = "", fix_loop: bo
         print(f"🤖 GENERATING — from scratch using API rules")
     print(f"{'=' * 70}")
 
-    final_code = call_llm(prompt, llm)
+    final_code = call_llm(prompt, system_prompt)
     if not final_code:
         print("\n❌ Generation failed.")
         return None
@@ -516,7 +530,7 @@ def run_query(user_input: str, llm, index, system_prompt: str = "", fix_loop: bo
     print(final_code)
 
     if fix_loop:
-        final_code = error_fix_loop(final_code, api_rules, llm)
+        final_code = error_fix_loop(final_code, api_rules)
 
     return final_code
 
@@ -526,10 +540,9 @@ def run_query(user_input: str, llm, index, system_prompt: str = "", fix_loop: bo
 # ─────────────────────────────────────────────
 
 try:
-    llm, pinecone_index, system_prompt = setup()
+    pinecone_index, system_prompt = setup()
 except Exception as e:
     print(f"❌ Setup failed: {e}")
-    llm            = None
     pinecone_index = None
     system_prompt  = ""
 
@@ -539,12 +552,12 @@ except Exception as e:
 # ─────────────────────────────────────────────
 
 if __name__ == "__main__":
-    if not llm:
+    if not pinecone_index:
         print("System not initialized. Exiting.")
         sys.exit(1)
 
     if len(sys.argv) > 1:
-        run_query(" ".join(sys.argv[1:]), llm, pinecone_index)
+        run_query(" ".join(sys.argv[1:]), pinecone_index, system_prompt=system_prompt)
     else:
         print("\nType 'exit' to quit\n")
         while True:
@@ -553,7 +566,7 @@ if __name__ == "__main__":
                 if not user_input or user_input.lower() in ["exit", "quit"]:
                     print("\nEnding the querying!")
                     break
-                run_query(user_input, llm, pinecone_index, system_prompt=system_prompt)
+                run_query(user_input, pinecone_index, system_prompt=system_prompt)
             except KeyboardInterrupt:
                 print("\nEnding the querying!")
-                break
+                breaks

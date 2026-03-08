@@ -1,6 +1,7 @@
 import streamlit as st
 import time
 import re
+import traceback
 from Retrieval import setup, run_query, build_fix_prompt, call_llm
 
 st.set_page_config(
@@ -13,14 +14,19 @@ st.title("⚙️ Replicad RAG System")
 
 
 # ─────────────────────────────────────────────
-# Initialize RAG — unpack the tuple from setup()
+# Initialize RAG — setup() returns (index, system_prompt)
 # ─────────────────────────────────────────────
 @st.cache_resource
 def initialize_rag():
-    llm, fix_llm, expand_llm, index = setup()
-    return llm, fix_llm, expand_llm, index
+    index, system_prompt = setup()
+    return index, system_prompt
 
-llm, fix_llm, expand_llm, pinecone_index = initialize_rag()
+try:
+    pinecone_index, system_prompt = initialize_rag()
+    st.sidebar.success("✅ RAG system ready")
+except Exception as e:
+    st.error(f"❌ RAG setup failed:\n\n```\n{traceback.format_exc()}\n```")
+    st.stop()
 
 
 # ─────────────────────────────────────────────
@@ -42,8 +48,9 @@ with tab1:
                 start = time.time()
 
                 generated_code = run_query(
-                    user_query, llm, fix_llm, expand_llm, pinecone_index,
-                    fix_loop=False   # ← skip terminal interaction in Streamlit
+                    user_query, pinecone_index,
+                    system_prompt=system_prompt,
+                    fix_loop=False
                 )
                 elapsed = time.time() - start
 
@@ -56,10 +63,14 @@ with tab1:
                     st.subheader("🤖 Generated Code")
                     st.code(generated_code, language="javascript")
                 else:
-                    st.error("Generation failed — check terminal logs for details.")
+                    st.error(
+                        "⚠️ Generation failed.\n\n"
+                        "Check Streamlit Cloud logs: top-right menu → **Manage app → Logs**"
+                    )
 
             except Exception as e:
-                st.error(f"Error: {e}")
+                st.error("❌ Exception during generation:")
+                st.code(traceback.format_exc(), language="python")
 
 
 # ─────────────────────────────────────────────
@@ -95,7 +106,7 @@ with tab2:
                     start = time.time()
 
                     fix_prompt = build_fix_prompt(error_msg, broken_code)
-                    fixed_code = call_llm(fix_prompt, fix_llm)
+                    fixed_code = call_llm(fix_prompt, system_prompt=system_prompt)
                     elapsed    = time.time() - start
 
                     if fixed_code:
@@ -107,9 +118,11 @@ with tab2:
                         st.subheader("✅ Fixed Code")
                         st.code(fixed_code, language="javascript")
                     else:
-                        st.error("Fix failed — check terminal logs for details.")
+                        st.error("Fix failed — check Streamlit Cloud logs.")
 
                 except Exception as e:
-                    st.error(f"Error: {e}")
+                    st.error("❌ Exception during fix:")
+                    st.code(traceback.format_exc(), language="python")
 
 st.markdown("---")
+st.caption("💡 Logs: top-right menu → Manage app → Logs")
