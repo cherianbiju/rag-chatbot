@@ -1,8 +1,7 @@
 """
 ingest.py — CAD Code Ingestion Pipeline
-========================================
-Reads .md Replicad code example files, embeds them with
-Microsoft CodeBERT, and upserts into Pinecone.
+Embeds Replicad code examples using Gemini
+and stores vectors in Pinecone.
 """
 
 import os
@@ -11,294 +10,283 @@ import time
 import hashlib
 import argparse
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List
 
-import torch
-from transformers import AutoTokenizer, AutoModel
+from google import genai
+from google.genai import types
 from dotenv import load_dotenv
 from pinecone import Pinecone, ServerlessSpec
 
 load_dotenv()
 
-# ─────────────────────────────────────────────
-# CONFIGURATION
-# ─────────────────────────────────────────────
+# ─────────────────────────────
+# CONFIG
+# ─────────────────────────────
 
-PINECONE_API_KEY  = os.getenv("PINECONE_API_KEY")
-CODE_INDEX_NAME   = os.getenv("CODE_INDEX_NAME", "cad-code-examples")
+PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-CODEBERT_MODEL    = "microsoft/codebert-base"
-EMBEDDING_DIM     = 768   # CodeBERT CLS token output dim
+CODE_INDEX_NAME = os.getenv("CODE_INDEX_NAME", "cad-code-examples")
 
-PINECONE_METRIC   = "cosine"
-PINECONE_CLOUD    = "aws"
-PINECONE_REGION   = "us-east-1"
+EMBEDDING_MODEL = "gemini-embedding-001"
+EMBEDDING_DIM = 3072
+
+PINECONE_METRIC = "cosine"
+PINECONE_CLOUD = "aws"
+PINECONE_REGION = "us-east-1"
 
 UPSERT_BATCH_SIZE = 50
+EMBED_DELAY = 0.3
 
-DEFAULT_CODE_DIR  = r"C:\Users\ASUS\Desktop\RAG_testing\code_data"
+DEFAULT_CODE_DIR = r"C:\Users\ASUS\Desktop\RAG_testing\code_data"
 
-tokenizer = None
-model     = None
-device    = None
-
-
-# ─────────────────────────────────────────────
-# CODEBERT SETUP
-# ─────────────────────────────────────────────
-
-def init_codebert():
-    global tokenizer, model, device
-
-    print(f"  Loading CodeBERT: {CODEBERT_MODEL} ...")
-    device    = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    tokenizer = AutoTokenizer.from_pretrained(CODEBERT_MODEL)
-    model     = AutoModel.from_pretrained(CODEBERT_MODEL).to(device)
-    model.eval()
-
-    print(f"  ✅ CodeBERT loaded on {device}")
-
-    # Smoke test
-    print("  🔬 Testing embedding...")
-    test = get_embedding("test connection")
-    if test is None:
-        raise RuntimeError("Embedding smoke test failed")
-    print(f"  ✅ Smoke test passed — got {len(test)}-dim vector\n")
+client = None
 
 
-def get_embedding(text: str) -> Optional[list]:
-    """
-    Tokenize text, run through CodeBERT, return CLS token vector (768-dim).
-    Input is truncated to 512 tokens (CodeBERT's max).
-    """
-    try:
-        inputs = tokenizer(
-            text,
-            return_tensors="pt",
-            truncation=True,
-            max_length=512,
-            padding=True,
-        ).to(device)
+# ─────────────────────────────
+# GEMINI
+# ─────────────────────────────
 
-        with torch.no_grad():
-            outputs = model(**inputs)
+def init_gemini():
+    global client
 
-        # CLS token → (1, 768) → flatten to list
-        cls_vector = outputs.last_hidden_state[:, 0, :]
-        return cls_vector.squeeze().cpu().tolist()
+    if not GEMINI_API_KEY:
+        raise ValueError("GEMINI_API_KEY missing")
 
-    except Exception as e:
-        print(f"    ❌ Embedding error: {repr(e)}")
-        return None
+    client = genai.Client(api_key=GEMINI_API_KEY)
+
+    print(f"✅ Gemini ready ({EMBEDDING_MODEL})")
+
+    emb = get_embedding("connection test")
+
+    if emb is None:
+        raise RuntimeError("Embedding test failed")
+
+    print(f"✅ Embedding working ({len(emb)} dims)")
 
 
-# ─────────────────────────────────────────────
-# PINECONE SETUP
-# ─────────────────────────────────────────────
+def get_embedding(text: str, retries: int = 5) -> Optional[List[float]]:
+
+    for attempt in range(retries):
+
+        try:
+
+            response = client.models.embed_content(
+                model=EMBEDDING_MODEL,
+                contents=text,
+                config=types.EmbedContentConfig(
+                    task_type="RETRIEVAL_DOCUMENT",
+                    output_dimensionality=EMBEDDING_DIM
+                )
+            )
+
+            return list(response.embeddings[0].values)
+
+        except Exception as e:
+
+            err = repr(e)
+
+            if "429" in err or "RESOURCE_EXHAUSTED" in err:
+                wait = 20 * (attempt + 1)
+                print(f"Rate limited → wait {wait}s")
+                time.sleep(wait)
+                continue
+
+            if "503" in err or "UNAVAILABLE" in err:
+                wait = 10 * (attempt + 1)
+                print(f"Server busy → wait {wait}s")
+                time.sleep(wait)
+                continue
+
+            print("Embedding error:", err)
+            time.sleep(5)
+
+    return None
+
+
+# ─────────────────────────────
+# PINECONE
+# ─────────────────────────────
 
 def init_pinecone():
-    if not PINECONE_API_KEY:
-        raise ValueError("PINECONE_API_KEY not set in .env")
 
-    pc       = Pinecone(api_key=PINECONE_API_KEY)
-    existing = [idx.name for idx in pc.list_indexes()]
+    pc = Pinecone(api_key=PINECONE_API_KEY)
+
+    existing = [i.name for i in pc.list_indexes()]
 
     if CODE_INDEX_NAME not in existing:
-        print(f"  Creating index: {CODE_INDEX_NAME} (dim={EMBEDDING_DIM})")
+
+        print("Creating Pinecone index...")
+
         pc.create_index(
             name=CODE_INDEX_NAME,
             dimension=EMBEDDING_DIM,
             metric=PINECONE_METRIC,
-            spec=ServerlessSpec(cloud=PINECONE_CLOUD, region=PINECONE_REGION),
+            spec=ServerlessSpec(
+                cloud=PINECONE_CLOUD,
+                region=PINECONE_REGION
+            )
         )
+
         while not pc.describe_index(CODE_INDEX_NAME).status["ready"]:
-            print("  Waiting for index to be ready...")
+            print("Waiting for index...")
             time.sleep(3)
-        print(f"  ✅ Index created: {CODE_INDEX_NAME}")
+
+        print("✅ Index created")
+
     else:
-        print(f"  ✅ Connected to index: {CODE_INDEX_NAME}")
+        print("✅ Using existing index")
 
     return pc.Index(CODE_INDEX_NAME)
 
 
-# ─────────────────────────────────────────────
-# METADATA EXTRACTION
-# ─────────────────────────────────────────────
+# ─────────────────────────────
+# METADATA
+# ─────────────────────────────
 
-CAD_CATEGORIES = {
-    "rotor":      ["rotor", "disc", "disk", "brake"],
-    "gear":       ["gear", "pinion", "rack", "tooth"],
-    "shaft":      ["shaft", "axle", "crankshaft", "camshaft"],
-    "housing":    ["housing", "casing", "enclosure"],
-    "bracket":    ["bracket", "mount", "flange", "plate"],
-    "piston":     ["piston", "cylinder", "connecting"],
-    "bearing":    ["bearing", "race", "ring", "bushing"],
-    "turbine":    ["turbine", "compressor", "blade", "wheel"],
-    "fastener":   ["bolt", "screw", "nut", "stud"],
-    "suspension": ["suspension", "control", "wishbone"],
-}
+def build_metadata(filepath: Path, code: str):
 
-def extract_metadata(filepath: Path, code: str) -> dict:
-    stem_lower = filepath.stem.lower()
-    code_lower = code.lower()
+    lines = code.count("\n")
 
-    category = "generic"
-    for cat, keywords in CAD_CATEGORIES.items():
-        if any(kw in stem_lower or kw in code_lower[:800] for kw in keywords):
-            category = cat
-            break
-
-    line_count = code.count("\n")
     complexity = "simple"
-    if line_count > 150:
+
+    if lines > 150:
         complexity = "complex"
-    elif line_count > 60:
+    elif lines > 60:
         complexity = "medium"
 
     return {
-        "source_file": filepath.name,
-        "category":    category,
-        "complexity":  complexity,
-        "line_count":  line_count,
-        "code":        code,        # full code stored — used by LLM at query time
+        "file": filepath.name,
+        "lines": lines,
+        "complexity": complexity,
+        "code": code
     }
 
 
-# ─────────────────────────────────────────────
-# BUILD EMBEDDING TEXT
-# ─────────────────────────────────────────────
+# ─────────────────────────────
+# EMBEDDING TEXT
+# ─────────────────────────────
 
-def build_embedding_text(stem: str, metadata: dict, code: str) -> str:
-    name_readable = stem.replace("_", " ").replace("-", " ")
+def build_embedding_text(name, metadata, code):
 
-    ops = []
-    if "revolve("  in code: ops.append("revolve")
-    if "extrude("  in code: ops.append("extrude")
-    if "sweep("    in code: ops.append("sweep")
-    if ".fuse("    in code: ops.append("boolean union")
-    if ".cut("     in code: ops.append("boolean cut")
-    if ".fillet("  in code: ops.append("fillet")
+    return f"""
+Replicad CAD example: {name}
 
-    description = (
-        f"Replicad CAD code example: {name_readable}. "
-        f"Category: {metadata['category']}. "
-        f"Operations: {', '.join(ops) if ops else 'basic'}. "
-        f"Complexity: {metadata['complexity']}.\n\n"
-    )
+Complexity: {metadata['complexity']}
+Lines: {metadata['lines']}
 
-    # Cap at 2000 chars — CodeBERT truncates at 512 tokens anyway
-    return description + code[:2000]
+Code:
+
+{code}
+"""
 
 
-# ─────────────────────────────────────────────
-# MAIN INGESTION
-# ─────────────────────────────────────────────
+# ─────────────────────────────
+# INGEST
+# ─────────────────────────────
 
-def ingest(code_dir: str, dry_run: bool = False):
-    print("\n" + "=" * 60)
-    print("  CAD CODE INGESTION  (Microsoft CodeBERT)")
-    print("=" * 60)
+def ingest(code_dir, dry_run=False):
 
     code_path = Path(code_dir)
-    if not code_path.exists():
-        raise FileNotFoundError(f"Directory not found: {code_dir}")
 
-    md_files = sorted(code_path.rglob("*.md"))
-    if not md_files:
-        print(f"  ⚠️  No .md files found in {code_dir}")
+    files = sorted(code_path.rglob("*.md"))
+
+    if not files:
+        print("No files found")
         return
 
-    print(f"\n  Found {len(md_files)} .md files in: {code_dir}")
+    print(f"Found {len(files)} files")
 
-    init_codebert()
-    index = init_pinecone() if not dry_run else None
+    init_gemini()
 
-    vectors       = []
-    success_count = 0
-    skip_count    = 0
-    error_count   = 0
+    index = None
+    if not dry_run:
+        index = init_pinecone()
 
-    for i, filepath in enumerate(md_files, 1):
-        print(f"\n  [{i}/{len(md_files)}] {filepath.name}")
+    vectors = []
+
+    success = 0
+    errors = 0
+
+    for i, file in enumerate(files, 1):
+
+        print(f"[{i}/{len(files)}] {file.name}")
 
         try:
-            code = filepath.read_text(encoding="utf-8").strip()
-            if not code:
-                print("    ⚠️  Empty — skipping")
-                skip_count += 1
-                continue
 
-            metadata   = extract_metadata(filepath, code)
-            embed_text = build_embedding_text(filepath.stem, metadata, code)
+            code = file.read_text(encoding="utf-8")
 
-            print(f"    category={metadata['category']}  "
-                  f"complexity={metadata['complexity']}  "
-                  f"lines={metadata['line_count']}  "
-                  f"embed_chars={len(embed_text)}")
+            metadata = build_metadata(file, code)
 
-            if dry_run:
-                print(f"    [DRY RUN] skipping upload")
-                success_count += 1
-                continue
+            embed_text = build_embedding_text(file.stem, metadata, code)
 
             embedding = get_embedding(embed_text)
+
             if embedding is None:
-                print("    ❌ Embedding failed — skipping")
-                error_count += 1
+                errors += 1
                 continue
 
-            print(f"    ✅ Embedded ({len(embedding)} dims)")
+            vector_id = hashlib.md5(
+                str(file).encode()
+            ).hexdigest()
 
-            vector_id = hashlib.md5(str(filepath).encode()).hexdigest()
             vectors.append({
-                "id":       vector_id,
-                "values":   embedding,
-                "metadata": metadata,
+                "id": vector_id,
+                "values": embedding,
+                "metadata": metadata
             })
-            success_count += 1
 
-            if len(vectors) >= UPSERT_BATCH_SIZE:
+            success += 1
+
+            if len(vectors) >= UPSERT_BATCH_SIZE and not dry_run:
+
                 index.upsert(vectors=vectors)
-                print(f"    📤 Upserted batch of {len(vectors)}")
+
+                print(f"Upserted {len(vectors)}")
+
                 vectors = []
 
-        except Exception as e:
-            print(f"    ❌ Unexpected error: {repr(e)}")
-            error_count += 1
+            time.sleep(EMBED_DELAY)
 
-    # Final partial batch
+        except Exception as e:
+
+            print("Error:", repr(e))
+
+            errors += 1
+
     if vectors and not dry_run:
         index.upsert(vectors=vectors)
-        print(f"\n  📤 Final upsert: {len(vectors)} vectors")
 
-    print("\n" + "=" * 60)
-    print("  INGESTION COMPLETE")
-    print("=" * 60)
-    print(f"  ✅ Success : {success_count}")
-    print(f"  ⏭️  Skipped : {skip_count}")
-    print(f"  ❌ Errors  : {error_count}")
+    print("\nFinished")
+    print("Success:", success)
+    print("Errors:", errors)
 
-    if not dry_run and index:
+    if index:
         stats = index.describe_index_stats()
-        print(f"  📦 Total vectors in Pinecone: {stats['total_vector_count']}")
-    print()
+        print("Total vectors:", stats["total_vector_count"])
 
 
-# ─────────────────────────────────────────────
-# ENTRY POINT
-# ─────────────────────────────────────────────
+# ─────────────────────────────
+# MAIN
+# ─────────────────────────────
 
 if __name__ == "__main__":
+
     parser = argparse.ArgumentParser()
-    parser.add_argument("--dir",     default=DEFAULT_CODE_DIR)
+
+    parser.add_argument("--dir", default=DEFAULT_CODE_DIR)
     parser.add_argument("--dry-run", action="store_true")
+
     args = parser.parse_args()
 
     try:
+
         ingest(args.dir, args.dry_run)
+
     except KeyboardInterrupt:
-        print("\n⚠️  Interrupted.")
         sys.exit(1)
+
     except Exception as e:
-        print(f"\n❌ Fatal error: {repr(e)}")
+
+        print("Fatal:", repr(e))
         sys.exit(1)

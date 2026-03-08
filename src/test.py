@@ -1,11 +1,10 @@
 from google import genai
 
-# 🔴 PASTE YOUR KEY DIRECTLY HERE (just for testing)
-client = genai.Client(api_key="PASTE_KEY_HERE")
+client = genai.Client(api_key="AIzaSyBtaCxXVJUbHS46oDL1_TVQgNX9GCCXMyc")
 
-print("Testing connection...")
+response = client.models.embed_content(
+    model="gemini-embedding-001",
+    contents="hello world"
+)
 
-for m in client.models.list():
-    print(m.name)
-
-print("Success")
+print(len(response.embeddings[0].values))

@@ -1,11 +1,11 @@
 import os
 import re
 import time
-import torch
-import numpy as np
 import sys
+import numpy as np
 from dotenv import load_dotenv
-from transformers import AutoTokenizer, AutoModel
+from google import genai
+from google.genai import types
 from pinecone import Pinecone
 from llama_index.llms.google_genai import GoogleGenAI
 from typing import Optional
@@ -20,18 +20,17 @@ PINECONE_API_KEY     = os.getenv("PINECONE_API_KEY")
 GEMINI_API_KEY       = os.getenv("GEMINI_API_KEY")
 CODE_INDEX_NAME      = os.getenv("CODE_INDEX_NAME", "cad-code-examples")
 
-LLM_MODEL            = "models/gemini-3-flash-preview"
-FIX_LLM_MODEL        = "models/gemini-3-flash-preview"
-QUERY_EXPAND_MODEL   = "models/gemini-3-flash-preview"
+LLM_MODEL            = "models/gemini-3.1-pro-preview"
+EMBEDDING_MODEL      = "gemini-embedding-001"        # must match ingest.py
 
-EMBEDDING_MODEL      = "microsoft/codebert-base"
 SIMILARITY_THRESHOLD = 0.75
-MAX_TOKENS           = 512
-MAX_FIX_ATTEMPTS     = 3
+MAX_FIX_ATTEMPTS     = 1
 
 BASE_DIR             = os.path.dirname(os.path.abspath(__file__))
 SYSTEM_PROMPT_PATH   = os.path.join(BASE_DIR, "replicad_system_prompt.js")
 API_RULES_PATH       = os.path.join(BASE_DIR, "readme.adoc")
+
+gemini_embed_client = None
 
 
 # ─────────────────────────────────────────────
@@ -47,69 +46,75 @@ def load_api_rules() -> str:
 
 
 # ─────────────────────────────────────────────
-# CODEBERT EMBEDDING
+# GEMINI EMBEDDING  (must match ingest.py)
 # ─────────────────────────────────────────────
 
-tokenizer = None
-model     = None
-
-def init_codebert():
-    global tokenizer, model
-    print(f"  Loading CodeBERT ({EMBEDDING_MODEL})...")
-    tokenizer = AutoTokenizer.from_pretrained(EMBEDDING_MODEL)
-    model     = AutoModel.from_pretrained(EMBEDDING_MODEL)
-    model.eval()
-    print(f"  ✅ CodeBERT ready")
+def init_gemini_embedding():
+    global gemini_embed_client
+    gemini_embed_client = genai.Client(
+        api_key=GEMINI_API_KEY,
+        http_options={"api_version": "v1beta"},
+    )
+    print(f"  ✅ Gemini embedding client ready ({EMBEDDING_MODEL})")
 
 
-def get_embedding(text: str) -> Optional[list]:
-    try:
-        inputs = tokenizer(
-            text,
-            return_tensors="pt",
-            truncation=True,
-            max_length=MAX_TOKENS,
-            padding=True,
-        )
-        with torch.no_grad():
-            outputs = model(**inputs)
-
-        cls_vector = outputs.last_hidden_state[:, 0, :].squeeze().numpy()
-        norm       = np.linalg.norm(cls_vector)
-        cls_vector = cls_vector / norm if norm > 0 else cls_vector
-        return cls_vector.tolist()
-
-    except Exception as e:
-        print(f"  ❌ Embedding error: {e}")
-        return None
+def get_embedding(text: str, retries: int = 3) -> Optional[list]:
+    global gemini_embed_client
+    for attempt in range(retries):
+        try:
+            response = gemini_embed_client.models.embed_content(
+                model=EMBEDDING_MODEL,
+                contents=text,
+                config=types.EmbedContentConfig(
+                    task_type="RETRIEVAL_QUERY",  # QUERY for search, DOCUMENT for ingest
+                ),
+            )
+            # 3072 dims — already normalized by Gemini
+            return list(response.embeddings[0].values)
+        except Exception as e:
+            err = repr(e)
+            if ("429" in err or "RESOURCE_EXHAUSTED" in err) and attempt < retries - 1:
+                print(f"    Rate limited — waiting 30s...")
+                time.sleep(30)
+                continue
+            if ("503" in err or "UNAVAILABLE" in err) and attempt < retries - 1:
+                wait = 15 * (attempt + 1)
+                print(f"    Server unavailable — waiting {wait}s...")
+                time.sleep(wait)
+                continue
+            print(f"  ❌ Embedding error: {err}")
+            if attempt < retries - 1:
+                time.sleep(5)
+            else:
+                return None
+    return None
 
 
 # ─────────────────────────────────────────────
-# GEMINI QUERY EXPANSION
+# QUERY EXPANSION  (Gemini)
 # ─────────────────────────────────────────────
 
-def expand_query_with_gemini(raw_query: str, expand_llm) -> str:
-    expansion_prompt = f"""You are a CAD expert helping retrieve the best matching Replicad code example from a vector database.
+def expand_query(raw_query: str, llm) -> str:
+    expansion_prompt = f"""You are a CAD expert helping retrieve Replicad JavaScript CAD code from a vector database.
 
-The database stores JavaScript Replicad CAD code. The embeddings were generated from code text using CodeBERT.
+Each stored document was embedded with this prefix style:
+"Replicad CAD code example: <part name>. Category: <category>. Operations: <op1, op2>. Complexity: <level>."
+followed by the actual JavaScript code.
 
-Your job: rewrite the user's part description into a rich technical description that describes:
-1. The part name and type
-2. Key geometric features (e.g. revolve, extrude, sweep, fillet, boolean cut/union)
-3. Likely code structure and Replicad API calls that would appear in the code
-4. Category (gear, shaft, housing, bearing, bracket, rotor, piston, turbine, fastener, suspension)
-5. Approximate complexity (simple / medium / complex)
+Your job: rewrite the user query to match this style, then add likely function/variable names from the code.
 
-Keep it concise (3-5 sentences). Write it as a technical code description, NOT as instructions to the LLM.
-Do NOT write code. Do NOT explain. Just output the expanded description.
+Categories: gear, shaft, housing, bearing, bracket, rotor, piston, turbine, fastener, suspension, generic
+Operations: revolve, extrude, sweep, boolean union, boolean cut, fillet
+
+Output only the rewritten description. No explanation.
 
 User query: {raw_query}
 
-Expanded technical description:"""
+Rewritten:"""
 
-    print(f"  🧠 Gemini expanding query for better retrieval...")
+    print(f"  🧠 Expanding query...")
     try:
-        response = expand_llm.complete(expansion_prompt)
+        response = llm.complete(expansion_prompt)
         expanded = response.text.strip()
         print(f"  📝 Expanded: {expanded[:120]}...")
         return expanded
@@ -122,17 +127,17 @@ Expanded technical description:"""
 # RETRIEVAL
 # ─────────────────────────────────────────────
 
-def retrieve_example(query: str, index, expand_llm) -> Optional[dict]:
+def retrieve_example(query: str, index, llm) -> Optional[dict]:
     print(f"\n🔍 Searching for similar example...")
 
-    expanded_query = expand_query_with_gemini(query, expand_llm)
+    expanded_query = expand_query(query, llm)
 
     embedding = get_embedding(expanded_query)
     if embedding is None:
         print("  ❌ Could not embed expanded query — trying raw query")
         embedding = get_embedding(query)
         if embedding is None:
-            print("  ❌ Could not embed raw query either")
+            print("  ❌ Embedding failed entirely")
             return None
 
     results = index.query(
@@ -146,12 +151,13 @@ def retrieve_example(query: str, index, expand_llm) -> Optional[dict]:
         print("  ❌ No matches found")
         return None
 
+    # Re-rank — boost filename word matches
     all_words = set(
         [w for w in query.lower().split()          if len(w) > 3] +
         [w for w in expanded_query.lower().split() if len(w) > 3]
     )
     for match in matches:
-        filename  = match["metadata"].get("source_file", "").lower()
+        filename  = match["metadata"].get("file", "").lower()
         word_hits = sum(1 for w in all_words if w in filename)
         if word_hits > 0:
             match["score"] += 1.5 * word_hits
@@ -160,27 +166,109 @@ def retrieve_example(query: str, index, expand_llm) -> Optional[dict]:
 
     print(f"  📊 Top matches:")
     for i, m in enumerate(matches[:3], 1):
-        fname = m["metadata"].get("source_file", "unknown")
+        fname = m["metadata"].get("file", "unknown")
         print(f"     {i}. {fname}  (score: {m['score']:.3f})")
 
     best     = matches[0]
     score    = best["score"]
-    filename = best["metadata"].get("source_file", "unknown")
+    filename = best["metadata"].get("file", "unknown")
 
     if score >= SIMILARITY_THRESHOLD:
+        # ── Strict filename match check ──────────────────────────────
+        # Extract the core part name from the query (remove generic words
+        # like "create", "generate", "make", "a", "the", "with" etc.)
+        STOP_WORDS = {
+            "create","generate","make","build","design","model","draw",
+            "give","show","produce","write","code","replicad","cad",
+            "with","and","for","the","that","has","from","using",
+            "a","an","of","in","on","at","to","is","are","gear" # "gear" alone is too generic
+        }
+        query_words = [
+            w for w in query.lower().split()
+            if len(w) > 3 and w not in STOP_WORDS
+        ]
+        fname_clean = filename.replace("_", " ").replace("-", " ").replace(".md", "").lower()
+
+        # All meaningful query words must appear in the filename
+        strict_match = all(w in fname_clean for w in query_words) if query_words else False
+
+        if not strict_match:
+            print(f"  ⚠️  Filename '{filename}' does not strictly match query words {query_words}")
+            print(f"       → Rejecting match, falling back to API rules + geometry hints")
+            return None
+
         code = best["metadata"].get("code", "")
-        print(f"  ✅ Best match: {filename} (score: {score:.3f})")
+        print(f"  ✅ Strict match confirmed: {filename} (score: {score:.3f})")
         return {"filename": filename, "score": score, "code": code}
     else:
-        print(f"  ⚠️  Best match below threshold: {filename} ({score:.3f}) — falling back to API rules")
+        print(f"  ⚠️  Below threshold: {filename} ({score:.3f}) — falling back to API rules")
         return None
+
+
+# ─────────────────────────────────────────────
+# GEOMETRY HINTS
+# Injected into the prompt when no DB match is
+# found — guides the LLM to generate the correct
+# geometry instead of falling back to a simpler shape
+# ─────────────────────────────────────────────
+
+GEOMETRY_HINTS = {
+    "worm gear": """A worm gear is NOT a disc gear. It has TWO completely different parts:
+
+PART 1 - THE WORM (looks like a bolt/screw):
+- Start with a cylinder (the shaft), e.g. radius=10, length=60
+- Cut a helical groove around it using a swept profile to create the thread
+- The result must look like a metal screw/bolt, NOT a gear disc
+
+PART 2 - THE WORM WHEEL (looks like a spur gear with a groove):
+- Start with a disc with involute teeth around the perimeter
+- Add a concave groove around the middle of the teeth face to cradle the worm
+- Has a central bore for a shaft
+
+Return BOTH parts positioned next to each other (worm horizontal, wheel vertical, meshing together).
+
+CRITICAL: The worm MUST be cylindrical like a screw. If you generate a disc shape for the worm, you are WRONG.""",
+
+    "bevel gear": """A bevel gear has teeth cut on a conical surface — teeth taper toward the apex.
+Generate a truncated cone, then cut tapered tooth profiles around its outer surface using boolean cuts.
+Key parameters: pitch angle, number of teeth, module, face width.
+Do NOT generate a spur gear. The blank must be conical, not cylindrical.""",
+
+    "rack": """A gear rack is a flat bar with straight teeth on one face — it meshes with a pinion gear.
+Generate a rectangular bar, then cut evenly-spaced triangular/involute tooth profiles along one face.
+Key parameters: module, number of teeth, tooth height, rack length, width, thickness.""",
+
+    "sprocket": """A sprocket has evenly spaced teeth designed to engage roller chain links.
+Generate a disc with D-shaped tooth profiles cut around the perimeter. Add a central bore.
+Key parameters: number of teeth, pitch, roller diameter, bore diameter.""",
+
+    "cycloidal": """A cycloidal gear uses cycloidal curves for tooth profiles instead of involute curves.
+Generate the tooth profile using parametric cycloidal math and extrude.
+Key parameters: number of teeth, disc radius, roller radius, eccentricity.""",
+
+    "cam": """A cam converts rotational motion to linear motion via a non-circular profile.
+Generate by extruding a non-circular 2D profile (e.g. egg-shaped, heart-shaped, or eccentric circle).
+Include a central shaft bore. Key parameters: base circle radius, lift amount, cam width.""",
+
+    "impeller": """An impeller has curved blades radiating from a central hub for fluid movement.
+Generate a disc hub, then sweep curved blade profiles around it at an angle.
+Key parameters: number of blades, inner radius, outer radius, blade angle, blade thickness.""",
+}
+
+def _geometry_hint(query: str) -> str:
+    """Return geometry-specific guidance based on keywords in the query."""
+    q = query.lower()
+    for keyword, hint in GEOMETRY_HINTS.items():
+        if keyword in q:
+            return hint
+    return "Generate the exact geometry described. Do not simplify or substitute with a different part type."
 
 
 # ─────────────────────────────────────────────
 # PROMPTS
 # ─────────────────────────────────────────────
 
-def build_prompt(query: str, api_rules: str, example: Optional[dict]) -> str:
+def build_prompt(query: str, api_rules: str, example: Optional[dict], system_prompt: str = "") -> str:
     if example:
         return f"""You are generating Replicad 3D CAD code for a mechanical part.
 
@@ -204,13 +292,22 @@ File: {example['filename']} (score: {example['score']:.3f})
 Generate now."""
 
     else:
+        geometry_hint = _geometry_hint(query)
+
         return f"""You are generating Replicad 3D CAD code for a mechanical part.
 
 No similar example was found in the database.
-Generate from scratch using the API rules below.
+You MUST generate the correct geometry from scratch — do NOT fall back to a simpler shape.
+For example, a worm gear is NOT a spur gear. A bevel gear is NOT a spur gear. Generate the exact requested geometry.
+
+# SYSTEM KNOWLEDGE (Replicad API rules and patterns)
+{system_prompt}
 
 # API RULES
 {api_rules}
+
+# GEOMETRY GUIDANCE FOR THIS PART
+{geometry_hint}
 
 # PART TO GENERATE
 {query}
@@ -249,7 +346,7 @@ Return ONLY the corrected javascript code. No explanation. No markdown fences.""
 
 
 # ─────────────────────────────────────────────
-# LLM CALL
+# LLM CALL  (Gemini)
 # ─────────────────────────────────────────────
 
 def call_llm(prompt: str, llm, max_retries: int = 5) -> Optional[str]:
@@ -295,7 +392,7 @@ def prompt_input(message: str) -> str:
 # ERROR FIX LOOP  (terminal mode only)
 # ─────────────────────────────────────────────
 
-def error_fix_loop(code: str, api_rules: str, fix_llm) -> str:
+def error_fix_loop(code: str, api_rules: str, llm) -> str:
     current_code = code
     attempt = 0
 
@@ -332,10 +429,7 @@ def error_fix_loop(code: str, api_rules: str, fix_llm) -> str:
         print(f"\n🔧 Fixing (attempt {attempt}/{MAX_FIX_ATTEMPTS})...")
 
         fix_start  = time.time()
-        fixed_code = call_llm(
-            build_fix_prompt(error_message, current_code),
-            fix_llm
-        )
+        fixed_code = call_llm(build_fix_prompt(error_message, current_code), llm)
         print(f"  ⏱️  Fix took {time.time() - fix_start:.1f}s")
 
         if not fixed_code:
@@ -376,39 +470,22 @@ def setup():
         system_prompt=system_prompt,
     )
 
-    fix_llm = GoogleGenAI(
-        model=FIX_LLM_MODEL,
-        api_key=GEMINI_API_KEY,
-        temperature=0.1,
-        request_timeout=300,
-        max_retries=3,
-        system_prompt=system_prompt,
-    )
-
-    expand_llm = GoogleGenAI(
-        model=QUERY_EXPAND_MODEL,
-        api_key=GEMINI_API_KEY,
-        temperature=0.0,
-        request_timeout=60,
-        max_retries=3,
-    )
-
-    init_codebert()
+    init_gemini_embedding()
 
     pc    = Pinecone(api_key=PINECONE_API_KEY)
     index = pc.Index(CODE_INDEX_NAME)
 
     print("✅ RAG ready\n")
-    return llm, fix_llm, expand_llm, index
+    return llm, index, system_prompt
 
 
 # ─────────────────────────────────────────────
 # MAIN QUERY FLOW
-# fix_loop=True  → terminal mode (interactive y/n error loop)
-# fix_loop=False → Streamlit mode (returns code immediately)
+# fix_loop=True  → terminal mode
+# fix_loop=False → Streamlit mode
 # ─────────────────────────────────────────────
 
-def run_query(user_input: str, llm, fix_llm, expand_llm, index, fix_loop: bool = True):
+def run_query(user_input: str, llm, index, system_prompt: str = "", fix_loop: bool = True):
     print("\n" + "=" * 70)
     print(f"QUERY: {user_input}")
     print("=" * 70)
@@ -417,8 +494,9 @@ def run_query(user_input: str, llm, fix_llm, expand_llm, index, fix_loop: bool =
     if not api_rules:
         print("⚠️  API rules empty — LLM will use own knowledge only")
 
-    example = retrieve_example(user_input, index, expand_llm)
-    prompt  = build_prompt(user_input, api_rules, example)
+    # If similar found → use file to generate, else → use api_rules + LLM
+    example = retrieve_example(user_input, index, llm)
+    prompt  = build_prompt(user_input, api_rules, example, system_prompt)
 
     print(f"\n{'=' * 70}")
     if example:
@@ -437,9 +515,8 @@ def run_query(user_input: str, llm, fix_llm, expand_llm, index, fix_loop: bool =
     print("=" * 70)
     print(final_code)
 
-    # Skip interactive terminal loop when called from Streamlit
     if fix_loop:
-        final_code = error_fix_loop(final_code, api_rules, fix_llm)
+        final_code = error_fix_loop(final_code, api_rules, llm)
 
     return final_code
 
@@ -449,13 +526,12 @@ def run_query(user_input: str, llm, fix_llm, expand_llm, index, fix_loop: bool =
 # ─────────────────────────────────────────────
 
 try:
-    llm, fix_llm, expand_llm, pinecone_index = setup()
+    llm, pinecone_index, system_prompt = setup()
 except Exception as e:
     print(f"❌ Setup failed: {e}")
     llm            = None
-    fix_llm        = None
-    expand_llm     = None
     pinecone_index = None
+    system_prompt  = ""
 
 
 # ─────────────────────────────────────────────
@@ -468,7 +544,7 @@ if __name__ == "__main__":
         sys.exit(1)
 
     if len(sys.argv) > 1:
-        run_query(" ".join(sys.argv[1:]), llm, fix_llm, expand_llm, pinecone_index)
+        run_query(" ".join(sys.argv[1:]), llm, pinecone_index)
     else:
         print("\nType 'exit' to quit\n")
         while True:
@@ -477,7 +553,7 @@ if __name__ == "__main__":
                 if not user_input or user_input.lower() in ["exit", "quit"]:
                     print("\nEnding the querying!")
                     break
-                run_query(user_input, llm, fix_llm, expand_llm, pinecone_index)
+                run_query(user_input, llm, pinecone_index, system_prompt=system_prompt)
             except KeyboardInterrupt:
                 print("\nEnding the querying!")
                 break
